@@ -1,0 +1,387 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>智能床垫 Three.js 调节动画</title>
+  <style>
+    :root {
+      --bg: #020b16;
+      --panel: rgba(8, 25, 44, 0.78);
+      --line: rgba(73, 156, 255, 0.24);
+      --line-strong: rgba(69, 164, 255, 0.72);
+      --blue: #2496ff;
+      --cyan: #39d7ff;
+      --green: #47d893;
+      --heat: #ff8a24;
+      --pink: #ff4d79;
+      --text: #f4f8ff;
+      --muted: rgba(220, 232, 250, 0.68);
+      --sans: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+      --mono: "SF Mono", "DIN Alternate", "Roboto Mono", monospace;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      overflow: hidden;
+      color: var(--text);
+      font-family: var(--sans);
+      background:
+        radial-gradient(circle at 50% 42%, rgba(33, 128, 232, 0.24), transparent 36%),
+        radial-gradient(circle at 16% 18%, rgba(74, 167, 255, 0.18), transparent 30%),
+        radial-gradient(circle at 86% 18%, rgba(50, 202, 255, 0.14), transparent 28%),
+        linear-gradient(180deg, #061529 0%, #051225 50%, #030b18 100%);
+    }
+
+    #scene {
+      position: fixed;
+      inset: 0;
+      width: 100vw;
+      height: 100vh;
+      display: block;
+    }
+
+    .grid {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background:
+        linear-gradient(rgba(52, 153, 255, 0.045) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(52, 153, 255, 0.04) 1px, transparent 1px);
+      background-size: 48px 48px;
+      mask-image: radial-gradient(circle at center, black 34%, transparent 78%);
+    }
+
+    .topbar {
+      position: fixed;
+      top: 28px;
+      left: 50%;
+      transform: translateX(-50%);
+      text-align: center;
+      pointer-events: none;
+      text-shadow: 0 0 22px rgba(96, 178, 255, 0.42);
+    }
+
+    .topbar h1 {
+      margin: 0;
+      font-size: clamp(24px, 3vw, 42px);
+      line-height: 1.15;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+    }
+
+    .topbar p {
+      margin: 14px 0 0;
+      color: var(--muted);
+      font-size: 15px;
+      letter-spacing: 0.14em;
+    }
+
+    .control-panel,
+    .metric-panel {
+      position: fixed;
+      z-index: 2;
+      width: min(380px, calc(100vw - 28px));
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: linear-gradient(180deg, rgba(10, 30, 53, 0.88), rgba(5, 18, 34, 0.86));
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,.018), 0 18px 42px rgba(0,0,0,.26);
+      backdrop-filter: blur(10px);
+      overflow: hidden;
+    }
+
+    .control-panel {
+      left: 28px;
+      bottom: 28px;
+      padding: 18px;
+    }
+
+    .metric-panel {
+      right: 28px;
+      bottom: 28px;
+      padding: 18px 18px 16px;
+    }
+
+    .panel-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 14px;
+      font-size: 15px;
+      font-weight: 800;
+      letter-spacing: .04em;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      height: 26px;
+      padding: 0 10px;
+      border: 1px solid rgba(86, 184, 255, .28);
+      border-radius: 999px;
+      color: #a6dcff;
+      background: rgba(26, 111, 210, .16);
+      font-family: var(--mono);
+      font-size: 12px;
+    }
+
+    .pill::before {
+      content: "";
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 13px rgba(71,216,147,.9);
+    }
+
+    .modes {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .thermal-controls {
+      margin-top: 16px;
+      padding-top: 14px;
+      border-top: 1px solid rgba(83, 174, 255, .16);
+    }
+
+    .sub-panel-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 10px;
+      color: rgba(232, 244, 255, .82);
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: .08em;
+    }
+
+    .heat-readout {
+      color: rgba(255, 194, 128, .92);
+      font-family: var(--mono);
+      font-size: 11px;
+    }
+
+    .heat-buttons {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    button {
+      min-height: 42px;
+      border: 1px solid rgba(73,156,255,.22);
+      border-radius: 6px;
+      color: rgba(235, 247, 255, .78);
+      background: rgba(12, 43, 78, .62);
+      font: 700 13px/1 var(--sans);
+      cursor: pointer;
+      transition: border-color .2s ease, color .2s ease, background .2s ease, box-shadow .2s ease;
+    }
+
+    button:hover,
+    button.active {
+      border-color: rgba(147,224,255,.86);
+      color: white;
+      background: linear-gradient(180deg, rgba(42, 154, 255, .72), rgba(18, 85, 178, .58));
+      box-shadow: 0 0 20px rgba(31,132,255,.42), inset 0 1px 0 rgba(255,255,255,.22);
+    }
+
+    button.heat-toggle {
+      border-color: rgba(255, 161, 72, .22);
+      color: rgba(255, 228, 202, .78);
+      background: rgba(78, 37, 12, .38);
+    }
+
+    button.heat-toggle:hover,
+    button.heat-toggle.active {
+      border-color: rgba(255, 202, 130, .88);
+      color: white;
+      background: linear-gradient(180deg, rgba(255, 146, 42, .74), rgba(166, 67, 18, .6));
+      box-shadow: 0 0 20px rgba(255, 122, 36, .34), inset 0 1px 0 rgba(255,255,255,.22);
+    }
+
+    .timeline {
+      margin-top: 16px;
+      height: 6px;
+      border-radius: 999px;
+      background: rgba(58, 154, 255, .16);
+      overflow: hidden;
+    }
+
+    .timeline i {
+      display: block;
+      height: 100%;
+      width: 36%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, transparent, var(--cyan), var(--blue));
+      box-shadow: 0 0 18px rgba(64,191,255,.86);
+      animation: loading 3.6s ease-in-out infinite;
+    }
+
+    @keyframes loading {
+      0%, 100% { transform: translateX(-65%); }
+      50% { transform: translateX(230%); }
+    }
+
+    .metrics {
+      display: grid;
+      gap: 10px;
+    }
+
+    .metric {
+      display: grid;
+      grid-template-columns: 54px 1fr 62px;
+      align-items: center;
+      gap: 10px;
+      color: rgba(228, 241, 255, .74);
+      font-size: 13px;
+    }
+
+    .bar {
+      height: 8px;
+      border-radius: 999px;
+      background: rgba(45, 111, 176, .2);
+      overflow: hidden;
+    }
+
+    .bar i {
+      display: block;
+      height: 100%;
+      width: var(--value);
+      border-radius: inherit;
+      background: linear-gradient(90deg, var(--blue), var(--cyan));
+      box-shadow: 0 0 14px rgba(57,215,255,.64);
+      transition: width .45s ease;
+    }
+
+    .metric b {
+      justify-self: end;
+      color: #d8f4ff;
+      font-family: var(--mono);
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .status-chip {
+      position: fixed;
+      left: 50%;
+      bottom: 34px;
+      transform: translateX(-50%);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      height: 42px;
+      padding: 0 18px;
+      border: 1px solid rgba(83, 174, 255, .34);
+      border-radius: 999px;
+      color: rgba(236, 248, 255, .9);
+      background: rgba(6, 22, 40, .66);
+      box-shadow: 0 0 24px rgba(36,150,255,.18);
+      backdrop-filter: blur(10px);
+      font-size: 14px;
+      letter-spacing: .05em;
+      pointer-events: none;
+    }
+
+    .status-chip i {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--cyan);
+      box-shadow: 0 0 14px rgba(57,215,255,.9);
+    }
+
+    @media (max-width: 900px) {
+      .topbar { top: 16px; width: calc(100vw - 24px); }
+      .topbar p { font-size: 12px; }
+      .control-panel { left: 14px; bottom: 14px; }
+      .metric-panel { display: none; }
+      .status-chip { display: none; }
+    }
+
+    body[data-embedded="true"] {
+      background: transparent !important;
+    }
+
+    body[data-embedded="true"] .topbar,
+    body[data-embedded="true"] .control-panel,
+    body[data-embedded="true"] .metric-panel,
+    body[data-embedded="true"] .status-chip,
+    body[data-embedded="true"] .grid {
+      display: none;
+    }
+  </style>
+</head>
+<body data-embedded="true">
+  <canvas id="scene"></canvas>
+  <div class="grid"></div>
+
+  <header class="topbar">
+    <h1>智能床垫调节过程演示</h1>
+    <p id="subtitle">左右气囊独立充放气，床垫表面保持稳定承托</p>
+  </header>
+
+  <section class="control-panel" aria-label="床垫调节模式">
+    <div class="panel-title">
+      <span>调节模式</span>
+      <span class="pill" id="modeName">AUTO</span>
+    </div>
+    <div class="modes">
+      <button class="active" type="button" data-mode="auto">左右智能调节</button>
+      <button type="button" data-mode="zero">气囊释压按摩</button>
+      <button type="button" data-mode="left">左侧独立调节</button>
+      <button type="button" data-mode="right">右侧独立调节</button>
+      <button type="button" data-mode="deep">深睡承托</button>
+      <button type="button" data-mode="flat">恢复平躺</button>
+    </div>
+    <div class="thermal-controls" aria-label="床垫表层加热">
+      <div class="sub-panel-title">
+        <span>表层加热</span>
+        <span class="heat-readout" id="heatSummary">OFF</span>
+      </div>
+      <div class="heat-buttons">
+        <button class="heat-toggle" type="button" data-heat-side="left" data-heat-zone="waist">左腰加热</button>
+        <button class="heat-toggle" type="button" data-heat-side="right" data-heat-zone="waist">右腰加热</button>
+        <button class="heat-toggle" type="button" data-heat-side="left" data-heat-zone="leg">左腿加热</button>
+        <button class="heat-toggle" type="button" data-heat-side="right" data-heat-zone="leg">右腿加热</button>
+      </div>
+    </div>
+    <div class="timeline"><i></i></div>
+  </section>
+
+  <section class="metric-panel" aria-label="调节参数">
+    <div class="panel-title">
+      <span>实时调节参数</span>
+      <span class="pill">AI RUN</span>
+    </div>
+    <div class="metrics">
+      <div class="metric"><span>肩部</span><span class="bar"><i id="barShoulder" style="--value: 48%"></i></span><b id="txtShoulder">48%</b></div>
+      <div class="metric"><span>背部</span><span class="bar"><i id="barBack" style="--value: 64%"></i></span><b id="txtBack">64%</b></div>
+      <div class="metric"><span>腰部</span><span class="bar"><i id="barWaist" style="--value: 82%"></i></span><b id="txtWaist">82%</b></div>
+      <div class="metric"><span>臀部</span><span class="bar"><i id="barHip" style="--value: 58%"></i></span><b id="txtHip">58%</b></div>
+      <div class="metric"><span>腿部</span><span class="bar"><i id="barLeg" style="--value: 42%"></i></span><b id="txtLeg">42%</b></div>
+    </div>
+  </section>
+
+  <div class="status-chip"><i></i><span id="statusText">检测到人体存在，分区智能调节中</span></div>
+
+  <script>
+    if (!Object.fromEntries) {
+      Object.fromEntries = function fromEntries(entries) {
+        var object = {};
+        for (var index = 0; index < entries.length; index += 1) {
+          object[entries[index][0]] = entries[index][1];
+        }
+        return object;
+      };
+    }
+  </script>
+  <script src="./scene.bundle.js"></script>
+</body>
+</html>
