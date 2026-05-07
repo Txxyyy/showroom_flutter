@@ -9,6 +9,13 @@ import 'package:flutter/services.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_android/webview_flutter_android.dart';
 
+import 'app_environment.dart';
+
+const bool _enableMockDashboardStream = bool.fromEnvironment(
+  'SHOWROOM_MOCK_STREAM',
+  defaultValue: true,
+);
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
@@ -24,7 +31,17 @@ Future<void> main() async {
       systemNavigationBarIconBrightness: Brightness.light,
     ),
   );
-  runApp(const SmartMattressShowroomApp());
+  final AppEnvironmentConfig config = AppEnvironmentConfig.current;
+  final Stream<Map<String, Object?>>? dashboardPayloadStream =
+      config.environment == AppEnvironment.dev && _enableMockDashboardStream
+          ? _buildMockDashboardPayloadStream()
+          : null;
+  runApp(
+    SmartMattressShowroomApp(
+      config: config,
+      dashboardPayloadStream: dashboardPayloadStream,
+    ),
+  );
 }
 
 enum AdjustmentMode {
@@ -123,59 +140,33 @@ enum AdjustmentMode {
 
   String? get warningKey => this == AdjustmentMode.deep ? 'hip' : null;
 
-  Map<String, int> get pressureValues {
-    switch (this) {
-      case AdjustmentMode.auto:
-        return <String, int>{
-          'shoulder': 48,
-          'back': 64,
-          'waist': 82,
-          'hip': 58,
-          'leg': 42,
-        };
-      case AdjustmentMode.zero:
-        return <String, int>{
-          'shoulder': 78,
-          'back': 88,
-          'waist': 62,
-          'hip': 68,
-          'leg': 86,
-        };
-      case AdjustmentMode.left:
-        return <String, int>{
-          'shoulder': 56,
-          'back': 84,
-          'waist': 92,
-          'hip': 64,
-          'leg': 46,
-        };
-      case AdjustmentMode.right:
-        return <String, int>{
-          'shoulder': 54,
-          'back': 82,
-          'waist': 90,
-          'hip': 66,
-          'leg': 48,
-        };
-      case AdjustmentMode.deep:
-        return <String, int>{
-          'shoulder': 38,
-          'back': 58,
-          'waist': 88,
-          'hip': 82,
-          'leg': 44,
-        };
-      case AdjustmentMode.flat:
-        return <String, int>{
-          'shoulder': 32,
-          'back': 34,
-          'waist': 36,
-          'hip': 34,
-          'leg': 31,
-        };
+  static AdjustmentMode? tryParse(String rawValue) {
+    switch (rawValue.trim().toLowerCase()) {
+      case 'auto':
+        return AdjustmentMode.auto;
+      case 'zero':
+        return AdjustmentMode.zero;
+      case 'left':
+        return AdjustmentMode.left;
+      case 'right':
+        return AdjustmentMode.right;
+      case 'deep':
+        return AdjustmentMode.deep;
+      case 'flat':
+        return AdjustmentMode.flat;
+      default:
+        return null;
     }
   }
 }
+
+const List<String> _pressureZoneKeys = <String>[
+  'shoulder',
+  'back',
+  'waist',
+  'hip',
+  'leg',
+];
 
 enum MattressHeatControl {
   leftWaist,
@@ -287,22 +278,722 @@ class MattressHeatingState {
   }
 }
 
+@immutable
+class MattressRealtimeMetrics {
+  const MattressRealtimeMetrics({
+    required this.heartRate,
+    required this.breathRate,
+  });
+
+  final int heartRate;
+  final int breathRate;
+
+  MattressRealtimeMetrics copyWith({
+    int? heartRate,
+    int? breathRate,
+  }) {
+    return MattressRealtimeMetrics(
+      heartRate: heartRate ?? this.heartRate,
+      breathRate: breathRate ?? this.breathRate,
+    );
+  }
+}
+
+@immutable
+class MattressTrendMetrics {
+  const MattressTrendMetrics({
+    required this.lumbarSupportIndex,
+    required this.lumbarSupportStatus,
+    required this.ergonomicIndex,
+    required this.ergonomicStatus,
+  });
+
+  final double lumbarSupportIndex;
+  final String lumbarSupportStatus;
+  final double ergonomicIndex;
+  final String ergonomicStatus;
+
+  MattressTrendMetrics copyWith({
+    double? lumbarSupportIndex,
+    String? lumbarSupportStatus,
+    double? ergonomicIndex,
+    String? ergonomicStatus,
+  }) {
+    return MattressTrendMetrics(
+      lumbarSupportIndex: lumbarSupportIndex ?? this.lumbarSupportIndex,
+      lumbarSupportStatus: lumbarSupportStatus ?? this.lumbarSupportStatus,
+      ergonomicIndex: ergonomicIndex ?? this.ergonomicIndex,
+      ergonomicStatus: ergonomicStatus ?? this.ergonomicStatus,
+    );
+  }
+}
+
+@immutable
+class MattressPressureChartData {
+  const MattressPressureChartData({
+    required this.currentValues,
+    required this.recommendedValues,
+    required this.markerIndex,
+    this.markerValue,
+    this.minValue = 5000,
+    this.maxValue = 10000,
+    this.labels = const <String>['肩部', '背部', '腰部', '臀部', '腿部'],
+  });
+
+  final List<double> currentValues;
+  final List<double> recommendedValues;
+  final int markerIndex;
+  final double? markerValue;
+  final double minValue;
+  final double maxValue;
+  final List<String> labels;
+
+  double get visibleMarkerValue {
+    if (markerValue != null) {
+      return markerValue!;
+    }
+    if (currentValues.isEmpty) {
+      return 0;
+    }
+    final int index = markerIndex.clamp(0, currentValues.length - 1);
+    return currentValues[index];
+  }
+
+  MattressPressureChartData copyWith({
+    List<double>? currentValues,
+    List<double>? recommendedValues,
+    int? markerIndex,
+    double? markerValue,
+    double? minValue,
+    double? maxValue,
+    List<String>? labels,
+  }) {
+    return MattressPressureChartData(
+      currentValues: currentValues ?? this.currentValues,
+      recommendedValues: recommendedValues ?? this.recommendedValues,
+      markerIndex: markerIndex ?? this.markerIndex,
+      markerValue: markerValue ?? this.markerValue,
+      minValue: minValue ?? this.minValue,
+      maxValue: maxValue ?? this.maxValue,
+      labels: labels ?? this.labels,
+    );
+  }
+}
+
+@immutable
+class MattressZoneTarget {
+  const MattressZoneTarget({
+    required this.pressure,
+    required this.glow,
+  });
+
+  final double pressure;
+  final double glow;
+
+  Map<String, Object> toJson() {
+    return <String, Object>{
+      'pressure': pressure,
+      'glow': glow,
+    };
+  }
+}
+
+@immutable
+class MattressModeMetrics {
+  const MattressModeMetrics({
+    required this.pressureValues,
+    required this.targets,
+    this.warningKey,
+  });
+
+  final Map<String, int> pressureValues;
+  final Map<String, MattressZoneTarget> targets;
+  final String? warningKey;
+
+  MattressModeMetrics copyWith({
+    Map<String, int>? pressureValues,
+    Map<String, MattressZoneTarget>? targets,
+    String? warningKey,
+  }) {
+    return MattressModeMetrics(
+      pressureValues: pressureValues ?? this.pressureValues,
+      targets: targets ?? this.targets,
+      warningKey: warningKey ?? this.warningKey,
+    );
+  }
+
+  Map<String, Object?> toJson() {
+    return <String, Object?>{
+      'values': pressureValues,
+      'targets': <String, Object>{
+        for (final MapEntry<String, MattressZoneTarget> entry
+            in targets.entries)
+          entry.key: entry.value.toJson(),
+      },
+      if (warningKey != null) 'warning': warningKey,
+    };
+  }
+}
+
+@immutable
+class MattressDashboardData {
+  const MattressDashboardData({
+    required this.realtime,
+    required this.trend,
+    required this.pressureChart,
+    required this.modeMetrics,
+  });
+
+  static const MattressDashboardData defaults = MattressDashboardData(
+    realtime: MattressRealtimeMetrics(
+      heartRate: 70,
+      breathRate: 16,
+    ),
+    trend: MattressTrendMetrics(
+      lumbarSupportIndex: 84,
+      lumbarSupportStatus: '优秀',
+      ergonomicIndex: 80,
+      ergonomicStatus: '良好',
+    ),
+    pressureChart: MattressPressureChartData(
+      currentValues: <double>[7200, 8650, 7850, 9100, 7050],
+      recommendedValues: <double>[6800, 7600, 7400, 8100, 6900],
+      markerIndex: 4,
+      markerValue: 7056,
+    ),
+    modeMetrics: <AdjustmentMode, MattressModeMetrics>{
+      AdjustmentMode.auto: MattressModeMetrics(
+        pressureValues: <String, int>{
+          'shoulder': 48,
+          'back': 64,
+          'waist': 82,
+          'hip': 58,
+          'leg': 42,
+        },
+        targets: <String, MattressZoneTarget>{
+          'shoulder': MattressZoneTarget(pressure: 0.38, glow: 0.35),
+          'back': MattressZoneTarget(pressure: 0.58, glow: 0.62),
+          'waist': MattressZoneTarget(pressure: 0.86, glow: 1),
+          'hip': MattressZoneTarget(pressure: 0.52, glow: 0.48),
+          'leg': MattressZoneTarget(pressure: 0.32, glow: 0.35),
+        },
+      ),
+      AdjustmentMode.zero: MattressModeMetrics(
+        pressureValues: <String, int>{
+          'shoulder': 78,
+          'back': 88,
+          'waist': 62,
+          'hip': 68,
+          'leg': 86,
+        },
+        targets: <String, MattressZoneTarget>{
+          'shoulder': MattressZoneTarget(pressure: 0.78, glow: 0.9),
+          'back': MattressZoneTarget(pressure: 0.88, glow: 0.78),
+          'waist': MattressZoneTarget(pressure: 0.56, glow: 0.45),
+          'hip': MattressZoneTarget(pressure: 0.64, glow: 0.52),
+          'leg': MattressZoneTarget(pressure: 0.82, glow: 0.92),
+        },
+      ),
+      AdjustmentMode.left: MattressModeMetrics(
+        pressureValues: <String, int>{
+          'shoulder': 56,
+          'back': 84,
+          'waist': 92,
+          'hip': 64,
+          'leg': 46,
+        },
+        targets: <String, MattressZoneTarget>{
+          'shoulder': MattressZoneTarget(pressure: 0.46, glow: 0.42),
+          'back': MattressZoneTarget(pressure: 0.82, glow: 0.86),
+          'waist': MattressZoneTarget(pressure: 0.96, glow: 1),
+          'hip': MattressZoneTarget(pressure: 0.6, glow: 0.62),
+          'leg': MattressZoneTarget(pressure: 0.34, glow: 0.35),
+        },
+      ),
+      AdjustmentMode.right: MattressModeMetrics(
+        pressureValues: <String, int>{
+          'shoulder': 54,
+          'back': 82,
+          'waist': 90,
+          'hip': 66,
+          'leg': 48,
+        },
+        targets: <String, MattressZoneTarget>{
+          'shoulder': MattressZoneTarget(pressure: 0.44, glow: 0.42),
+          'back': MattressZoneTarget(pressure: 0.8, glow: 0.86),
+          'waist': MattressZoneTarget(pressure: 0.94, glow: 1),
+          'hip': MattressZoneTarget(pressure: 0.62, glow: 0.62),
+          'leg': MattressZoneTarget(pressure: 0.36, glow: 0.35),
+        },
+      ),
+      AdjustmentMode.deep: MattressModeMetrics(
+        pressureValues: <String, int>{
+          'shoulder': 38,
+          'back': 58,
+          'waist': 88,
+          'hip': 82,
+          'leg': 44,
+        },
+        warningKey: 'hip',
+        targets: <String, MattressZoneTarget>{
+          'shoulder': MattressZoneTarget(pressure: 0.22, glow: 0.18),
+          'back': MattressZoneTarget(pressure: 0.5, glow: 0.44),
+          'waist': MattressZoneTarget(pressure: 0.9, glow: 0.96),
+          'hip': MattressZoneTarget(pressure: 0.84, glow: 0.86),
+          'leg': MattressZoneTarget(pressure: 0.3, glow: 0.28),
+        },
+      ),
+      AdjustmentMode.flat: MattressModeMetrics(
+        pressureValues: <String, int>{
+          'shoulder': 32,
+          'back': 34,
+          'waist': 36,
+          'hip': 34,
+          'leg': 31,
+        },
+        targets: <String, MattressZoneTarget>{
+          'shoulder': MattressZoneTarget(pressure: 0.16, glow: 0.12),
+          'back': MattressZoneTarget(pressure: 0.18, glow: 0.12),
+          'waist': MattressZoneTarget(pressure: 0.2, glow: 0.12),
+          'hip': MattressZoneTarget(pressure: 0.18, glow: 0.12),
+          'leg': MattressZoneTarget(pressure: 0.16, glow: 0.12),
+        },
+      ),
+    },
+  );
+
+  final MattressRealtimeMetrics realtime;
+  final MattressTrendMetrics trend;
+  final MattressPressureChartData pressureChart;
+  final Map<AdjustmentMode, MattressModeMetrics> modeMetrics;
+
+  MattressModeMetrics metricsFor(AdjustmentMode mode) {
+    return modeMetrics[mode] ??
+        defaults.modeMetrics[mode] ??
+        defaults.modeMetrics[AdjustmentMode.flat]!;
+  }
+
+  MattressDashboardData copyWith({
+    MattressRealtimeMetrics? realtime,
+    MattressTrendMetrics? trend,
+    MattressPressureChartData? pressureChart,
+    Map<AdjustmentMode, MattressModeMetrics>? modeMetrics,
+  }) {
+    return MattressDashboardData(
+      realtime: realtime ?? this.realtime,
+      trend: trend ?? this.trend,
+      pressureChart: pressureChart ?? this.pressureChart,
+      modeMetrics: modeMetrics ?? this.modeMetrics,
+    );
+  }
+
+  MattressDashboardData copyWithModeMetrics(
+    AdjustmentMode mode,
+    MattressModeMetrics metrics,
+  ) {
+    return copyWith(
+      modeMetrics: <AdjustmentMode, MattressModeMetrics>{
+        ...modeMetrics,
+        mode: metrics,
+      },
+    );
+  }
+
+  Map<String, Object?> toWebViewPayload() {
+    return <String, Object?>{
+      'modes': <String, Object?>{
+        for (final MapEntry<AdjustmentMode, MattressModeMetrics> entry
+            in modeMetrics.entries)
+          entry.key.rawValue: entry.value.toJson(),
+      },
+    };
+  }
+}
+
+class MattressDashboardController extends ValueNotifier<MattressDashboardData> {
+  MattressDashboardController({
+    MattressDashboardData initialData = MattressDashboardData.defaults,
+  }) : super(initialData);
+
+  MattressDashboardData get data => value;
+
+  void replace(MattressDashboardData nextData) {
+    value = nextData;
+  }
+
+  void update(
+    MattressDashboardData Function(MattressDashboardData current) transform,
+  ) {
+    value = transform(value);
+  }
+
+  void updateRealtime({
+    int? heartRate,
+    int? breathRate,
+  }) {
+    update((MattressDashboardData current) {
+      return current.copyWith(
+        realtime: current.realtime.copyWith(
+          heartRate: heartRate,
+          breathRate: breathRate,
+        ),
+      );
+    });
+  }
+
+  void updateTrend({
+    double? lumbarSupportIndex,
+    String? lumbarSupportStatus,
+    double? ergonomicIndex,
+    String? ergonomicStatus,
+  }) {
+    update((MattressDashboardData current) {
+      return current.copyWith(
+        trend: current.trend.copyWith(
+          lumbarSupportIndex: lumbarSupportIndex,
+          lumbarSupportStatus: lumbarSupportStatus,
+          ergonomicIndex: ergonomicIndex,
+          ergonomicStatus: ergonomicStatus,
+        ),
+      );
+    });
+  }
+
+  void updatePressureChart(MattressPressureChartData pressureChart) {
+    update((MattressDashboardData current) {
+      return current.copyWith(pressureChart: pressureChart);
+    });
+  }
+
+  void updateModeMetrics(
+    AdjustmentMode mode,
+    MattressModeMetrics metrics,
+  ) {
+    update((MattressDashboardData current) {
+      return current.copyWithModeMetrics(mode, metrics);
+    });
+  }
+
+  void applyPayload(Map<String, Object?> payload) {
+    update((MattressDashboardData current) {
+      MattressDashboardData next = current;
+
+      final Map<String, Object?>? realtime = _asObjectMap(payload['realtime']);
+      if (realtime != null) {
+        next = next.copyWith(
+          realtime: next.realtime.copyWith(
+            heartRate: _asInt(realtime['heartRate']),
+            breathRate: _asInt(realtime['breathRate']),
+          ),
+        );
+      }
+
+      final Map<String, Object?>? trend = _asObjectMap(payload['trend']);
+      if (trend != null) {
+        next = next.copyWith(
+          trend: next.trend.copyWith(
+            lumbarSupportIndex: _asDouble(trend['lumbarSupportIndex']),
+            lumbarSupportStatus: _asString(trend['lumbarSupportStatus']),
+            ergonomicIndex: _asDouble(trend['ergonomicIndex']),
+            ergonomicStatus: _asString(trend['ergonomicStatus']),
+          ),
+        );
+      }
+
+      final Map<String, Object?>? pressureChart =
+          _asObjectMap(payload['pressureChart']);
+      if (pressureChart != null) {
+        next = next.copyWith(
+          pressureChart: next.pressureChart.copyWith(
+            currentValues: _asDoubleList(pressureChart['currentValues']),
+            recommendedValues:
+                _asDoubleList(pressureChart['recommendedValues']),
+            markerIndex: _asInt(pressureChart['markerIndex']),
+            markerValue: _asDouble(pressureChart['markerValue']),
+            minValue: _asDouble(pressureChart['minValue']),
+            maxValue: _asDouble(pressureChart['maxValue']),
+            labels: _asStringList(pressureChart['labels']),
+          ),
+        );
+      }
+
+      final Map<String, Object?>? modes = _asObjectMap(payload['modes']);
+      if (modes != null) {
+        for (final MapEntry<String, Object?> entry in modes.entries) {
+          final AdjustmentMode? mode = AdjustmentMode.tryParse(entry.key);
+          final Map<String, Object?>? modePayload = _asObjectMap(entry.value);
+          if (mode == null || modePayload == null) {
+            continue;
+          }
+
+          final MattressModeMetrics currentMetrics = next.metricsFor(mode);
+          final Map<String, int> pressureValues = <String, int>{
+            ...currentMetrics.pressureValues
+          };
+          final Map<String, MattressZoneTarget> targets =
+              <String, MattressZoneTarget>{...currentMetrics.targets};
+
+          final Map<String, Object?>? values =
+              _asObjectMap(modePayload['values']);
+          if (values != null) {
+            for (final String key in _pressureZoneKeys) {
+              final int? value = _asInt(values[key]);
+              if (value != null) {
+                pressureValues[key] = math.max(0, math.min(100, value));
+              }
+            }
+          }
+
+          final Map<String, Object?>? targetPayloads =
+              _asObjectMap(modePayload['targets']);
+          if (targetPayloads != null) {
+            for (final String key in _pressureZoneKeys) {
+              final Map<String, Object?>? targetPayload =
+                  _asObjectMap(targetPayloads[key]);
+              if (targetPayload == null) {
+                continue;
+              }
+              final MattressZoneTarget baseTarget = targets[key] ??
+                  const MattressZoneTarget(pressure: 0, glow: 0);
+              final double pressure =
+                  _asDouble(targetPayload['pressure']) ?? baseTarget.pressure;
+              final double glow =
+                  _asDouble(targetPayload['glow']) ?? baseTarget.glow;
+              targets[key] = MattressZoneTarget(
+                pressure: math.max(0, math.min(1, pressure)),
+                glow: math.max(0, math.min(1, glow)),
+              );
+            }
+          }
+
+          final String? warningKey = modePayload.containsKey('warning')
+              ? _asString(modePayload['warning'])
+              : currentMetrics.warningKey;
+
+          next = next.copyWithModeMetrics(
+            mode,
+            currentMetrics.copyWith(
+              pressureValues: pressureValues,
+              targets: targets,
+              warningKey: warningKey,
+            ),
+          );
+        }
+      }
+
+      return next;
+    });
+  }
+}
+
+Map<String, Object?>? _asObjectMap(Object? value) {
+  if (value is! Map) {
+    return null;
+  }
+  return <String, Object?>{
+    for (final MapEntry<Object?, Object?> entry in value.entries)
+      entry.key.toString(): entry.value,
+  };
+}
+
+int? _asInt(Object? value) {
+  if (value is int) {
+    return value;
+  }
+  if (value is num) {
+    return value.round();
+  }
+  if (value is String) {
+    return int.tryParse(value);
+  }
+  return null;
+}
+
+double? _asDouble(Object? value) {
+  if (value is double) {
+    return value;
+  }
+  if (value is num) {
+    return value.toDouble();
+  }
+  if (value is String) {
+    return double.tryParse(value);
+  }
+  return null;
+}
+
+String? _asString(Object? value) {
+  return value is String ? value : null;
+}
+
+List<double>? _asDoubleList(Object? value) {
+  if (value is! List) {
+    return null;
+  }
+  return value.map(_asDouble).whereType<double>().toList(growable: false);
+}
+
+List<String>? _asStringList(Object? value) {
+  if (value is! List) {
+    return null;
+  }
+  return value.map(_asString).whereType<String>().toList(growable: false);
+}
+
+Stream<Map<String, Object?>> _buildMockDashboardPayloadStream() {
+  return Stream<Map<String, Object?>>.periodic(
+    const Duration(seconds: 2),
+    (int tick) => _mockDashboardPayload(tick),
+  );
+}
+
+Map<String, Object?> _mockDashboardPayload(int tick) {
+  final double phase = tick / 4;
+  final int heartRate = 72 + (math.sin(phase) * 8).round();
+  final int breathRate = 16 + (math.cos(phase * 0.85) * 2).round();
+  final double lumbarSupportIndex = 84 + math.sin(phase * 0.7) * 7;
+  final double ergonomicIndex = 80 + math.cos(phase * 0.6) * 6;
+
+  double wave(int index, double offset, double amplitude) {
+    return 7200 +
+        math.sin(phase + offset + index * 0.62) * amplitude +
+        index * 180;
+  }
+
+  Map<String, Object?> modePayload(
+    AdjustmentMode mode, {
+    required double offset,
+    String? warning,
+  }) {
+    final MattressModeMetrics base =
+        MattressDashboardData.defaults.metricsFor(mode);
+    final Map<String, int> values = <String, int>{};
+    for (int index = 0; index < _pressureZoneKeys.length; index += 1) {
+      final String key = _pressureZoneKeys[index];
+      final int baseValue = base.pressureValues[key] ?? 40;
+      final int drift = (math.sin(phase + offset + index * 0.8) * 7).round();
+      values[key] = math.max(0, math.min(100, baseValue + drift));
+    }
+    return <String, Object?>{
+      'values': values,
+      'targets': <String, Object?>{
+        for (final String key in _pressureZoneKeys)
+          key: <String, Object?>{
+            'pressure': math.max(
+              0,
+              math.min(
+                1,
+                (base.targets[key]?.pressure ?? 0.3) +
+                    math.sin(phase + offset) * 0.05,
+              ),
+            ),
+            'glow': math.max(
+              0,
+              math.min(
+                1,
+                (base.targets[key]?.glow ?? 0.3) +
+                    math.cos(phase + offset) * 0.05,
+              ),
+            ),
+          },
+      },
+      'warning': warning,
+    };
+  }
+
+  return <String, Object?>{
+    'realtime': <String, Object?>{
+      'heartRate': heartRate,
+      'breathRate': breathRate,
+    },
+    'trend': <String, Object?>{
+      'lumbarSupportIndex': lumbarSupportIndex,
+      'lumbarSupportStatus': lumbarSupportIndex >= 88 ? '优秀' : '稳定',
+      'ergonomicIndex': ergonomicIndex,
+      'ergonomicStatus': ergonomicIndex >= 82 ? '良好' : '波动',
+    },
+    'pressureChart': <String, Object?>{
+      'currentValues': <double>[
+        wave(0, 0.2, 540),
+        wave(1, 0.4, 690),
+        wave(2, 0.6, 730),
+        wave(3, 0.9, 680),
+        wave(4, 1.1, 520),
+      ],
+      'recommendedValues': const <double>[6800, 7600, 7400, 8100, 6900],
+      'markerIndex': tick % _pressureZoneKeys.length,
+      'markerValue': wave(tick % _pressureZoneKeys.length, 0.45, 660),
+    },
+    'modes': <String, Object?>{
+      AdjustmentMode.flat.rawValue: modePayload(
+        AdjustmentMode.flat,
+        offset: 0.2,
+      ),
+      AdjustmentMode.auto.rawValue: modePayload(
+        AdjustmentMode.auto,
+        offset: 0.45,
+      ),
+      AdjustmentMode.left.rawValue: modePayload(
+        AdjustmentMode.left,
+        offset: 0.75,
+      ),
+      AdjustmentMode.right.rawValue: modePayload(
+        AdjustmentMode.right,
+        offset: 1.05,
+      ),
+      AdjustmentMode.zero.rawValue: modePayload(
+        AdjustmentMode.zero,
+        offset: 1.35,
+      ),
+      AdjustmentMode.deep.rawValue: modePayload(
+        AdjustmentMode.deep,
+        offset: 1.65,
+        warning: 'hip',
+      ),
+    },
+  };
+}
+
 class SmartMattressShowroomApp extends StatelessWidget {
-  const SmartMattressShowroomApp({super.key});
+  const SmartMattressShowroomApp({
+    required this.config,
+    this.dashboardData = MattressDashboardData.defaults,
+    this.dashboardController,
+    this.dashboardPayloadStream,
+    super.key,
+  });
+
+  final AppEnvironmentConfig config;
+  final MattressDashboardData dashboardData;
+  final MattressDashboardController? dashboardController;
+  final Stream<Map<String, Object?>>? dashboardPayloadStream;
 
   @override
   Widget build(BuildContext context) {
-    return const MaterialApp(
+    return MaterialApp(
       debugShowCheckedModeBanner: false,
-      title: 'Smart Mattress Showroom',
+      title: config.appTitle,
       color: Colors.black,
-      home: ShowroomDashboardPage(),
+      home: ShowroomDashboardPage(
+        dashboardData: dashboardData,
+        dashboardController: dashboardController,
+        dashboardPayloadStream: dashboardPayloadStream,
+      ),
     );
   }
 }
 
 class ShowroomDashboardPage extends StatefulWidget {
-  const ShowroomDashboardPage({super.key});
+  const ShowroomDashboardPage({
+    this.dashboardData = MattressDashboardData.defaults,
+    this.dashboardController,
+    this.dashboardPayloadStream,
+    super.key,
+  });
+
+  final MattressDashboardData dashboardData;
+  final MattressDashboardController? dashboardController;
+  final Stream<Map<String, Object?>>? dashboardPayloadStream;
 
   @override
   State<ShowroomDashboardPage> createState() => _ShowroomDashboardPageState();
@@ -317,6 +1008,7 @@ class _ShowroomDashboardPageState extends State<ShowroomDashboardPage> {
   late final ValueNotifier<int> _repaint;
   late final WebViewController _webViewController;
   Timer? _repaintTimer;
+  StreamSubscription<Map<String, Object?>>? _dashboardPayloadSubscription;
   io.HttpServer? _assetServer;
 
   AdjustmentMode _selectedMode = AdjustmentMode.flat;
@@ -330,12 +1022,17 @@ class _ShowroomDashboardPageState extends State<ShowroomDashboardPage> {
 
   AdjustmentMode? _lastMode;
   MattressHeatingState? _lastHeating;
+  MattressDashboardData? _lastDashboardData;
   int? _lastModeRestartToken;
   int? _lastResetToken;
+  late MattressDashboardController _dashboardController;
+  bool _ownsDashboardController = false;
 
   @override
   void initState() {
     super.initState();
+    _attachDashboardController(widget.dashboardController);
+    _attachDashboardPayloadStream(widget.dashboardPayloadStream);
     _repaint = ValueNotifier<int>(0);
     _repaintTimer = Timer.periodic(_dashboardFrameInterval, (_) {
       if (mounted) {
@@ -350,8 +1047,77 @@ class _ShowroomDashboardPageState extends State<ShowroomDashboardPage> {
   void dispose() {
     _repaintTimer?.cancel();
     unawaited(_assetServer?.close(force: true));
+    unawaited(_dashboardPayloadSubscription?.cancel());
+    _detachDashboardController();
     _repaint.dispose();
     super.dispose();
+  }
+
+  @override
+  void didUpdateWidget(covariant ShowroomDashboardPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.dashboardController != widget.dashboardController) {
+      final MattressDashboardData currentData = _dashboardData;
+      _detachDashboardController();
+      _attachDashboardController(
+        widget.dashboardController,
+        seedData: currentData,
+      );
+      unawaited(_applySmartMattressState());
+      return;
+    }
+    if (oldWidget.dashboardPayloadStream != widget.dashboardPayloadStream) {
+      unawaited(_dashboardPayloadSubscription?.cancel());
+      _attachDashboardPayloadStream(widget.dashboardPayloadStream);
+    }
+    if (_ownsDashboardController &&
+        oldWidget.dashboardData != widget.dashboardData) {
+      _dashboardController.replace(widget.dashboardData);
+    }
+  }
+
+  MattressDashboardData get _dashboardData => _dashboardController.data;
+
+  void _attachDashboardController(
+    MattressDashboardController? controller, {
+    MattressDashboardData? seedData,
+  }) {
+    _ownsDashboardController = controller == null;
+    _dashboardController = controller ??
+        MattressDashboardController(
+          initialData: seedData ?? widget.dashboardData,
+        );
+    _dashboardController.addListener(_handleDashboardDataChanged);
+  }
+
+  void _detachDashboardController() {
+    _dashboardController.removeListener(_handleDashboardDataChanged);
+    if (_ownsDashboardController) {
+      _dashboardController.dispose();
+    }
+  }
+
+  void _attachDashboardPayloadStream(Stream<Map<String, Object?>>? stream) {
+    if (stream == null) {
+      _dashboardPayloadSubscription = null;
+      return;
+    }
+    _dashboardPayloadSubscription = stream.listen(
+      (Map<String, Object?> payload) {
+        _dashboardController.applyPayload(payload);
+      },
+      onError: (Object error, StackTrace stackTrace) {
+        debugPrint('SmartMattress dashboard payload stream error: $error');
+      },
+    );
+  }
+
+  void _handleDashboardDataChanged() {
+    if (!mounted) {
+      return;
+    }
+    setState(() {});
+    unawaited(_applySmartMattressState());
   }
 
   WebViewController _buildWebViewController() {
@@ -532,16 +1298,24 @@ class _ShowroomDashboardPageState extends State<ShowroomDashboardPage> {
     final bool shouldApplyMode = _lastMode != _selectedMode ||
         _lastModeRestartToken != _modeRestartToken;
     final bool shouldApplyHeating = _lastHeating != _heating;
+    final bool shouldApplyDashboardData = _lastDashboardData != _dashboardData;
     final bool shouldApplyReset = _lastResetToken != _resetToken;
-    if (!shouldApplyMode && !shouldApplyHeating && !shouldApplyReset) {
+    if (!shouldApplyMode &&
+        !shouldApplyHeating &&
+        !shouldApplyDashboardData &&
+        !shouldApplyReset) {
       return;
     }
 
     final String mode = jsonEncode(_selectedMode.rawValue);
     final String heating = jsonEncode(_heating.toJson());
+    final String dashboardData = jsonEncode(_dashboardData.toWebViewPayload());
     final String script = '''
     (function retrySmartMattressState() {
       if (window.SmartMattress3D && window.__smartMattressSetMode && window.__smartMattressSetHeating) {
+        if (${shouldApplyDashboardData ? 'true' : 'false'} && window.__smartMattressSetDashboardData) {
+          window.__smartMattressSetDashboardData($dashboardData);
+        }
         if (${shouldApplyMode ? 'true' : 'false'}) {
           window.__smartMattressSetMode($mode);
         }
@@ -563,6 +1337,7 @@ class _ShowroomDashboardPageState extends State<ShowroomDashboardPage> {
       _lastMode = _selectedMode;
       _lastModeRestartToken = _modeRestartToken;
       _lastHeating = _heating;
+      _lastDashboardData = _dashboardData;
       _lastResetToken = _resetToken;
     } catch (_) {
       // Keep the pending state. The next successful page finish or user action
@@ -611,6 +1386,7 @@ class _ShowroomDashboardPageState extends State<ShowroomDashboardPage> {
                 child: CustomPaint(
                   painter: _ShowroomPainter(
                     mode: _selectedMode,
+                    data: _dashboardData,
                     layer: _ShowroomPaintLayer.static,
                   ),
                   size: Size.infinite,
@@ -620,6 +1396,7 @@ class _ShowroomDashboardPageState extends State<ShowroomDashboardPage> {
                 child: CustomPaint(
                   painter: _ShowroomPainter(
                     mode: _selectedMode,
+                    data: _dashboardData,
                     layer: _ShowroomPaintLayer.dynamic,
                     repaint: _repaint,
                   ),
@@ -1141,11 +1918,13 @@ class _ShowroomLayout {
 class _ShowroomPainter extends CustomPainter {
   _ShowroomPainter({
     required this.mode,
+    required this.data,
     required this.layer,
     Listenable? repaint,
   }) : super(repaint: repaint);
 
   final AdjustmentMode mode;
+  final MattressDashboardData data;
   final _ShowroomPaintLayer layer;
   late Canvas _canvas;
   late DateTime _now;
@@ -1200,7 +1979,9 @@ class _ShowroomPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _ShowroomPainter oldDelegate) {
-    return oldDelegate.mode != mode || oldDelegate.layer != layer;
+    return oldDelegate.mode != mode ||
+        oldDelegate.data != data ||
+        oldDelegate.layer != layer;
   }
 
   void _drawBase() {
@@ -1220,8 +2001,8 @@ class _ShowroomPainter extends CustomPainter {
     _drawHeaderTime();
     _drawMetricDynamics(44, 138);
     _drawMetricDynamics(1351, 138);
-    _drawChartDynamic(44 + 22, 138 + 624 + 104, 481, 170);
-    _drawChartDynamic(1351 + 22, 138 + 624 + 104, 481, 170);
+    _drawChartDynamic(44 + 22, 138 + 624 + 104, 481, 170, data.pressureChart);
+    _drawChartDynamic(1351 + 22, 138 + 624 + 104, 481, 170, data.pressureChart);
     _drawBottomPulseLine(includeTrack: false, includeSweep: true);
     _drawFooter();
   }
@@ -1389,7 +2170,7 @@ class _ShowroomPainter extends CustomPainter {
       240,
       168,
       '实时心率',
-      '70',
+      data.realtime.heartRate.toString(),
       '次/分',
       pink,
       true,
@@ -1400,7 +2181,7 @@ class _ShowroomPainter extends CustomPainter {
       229,
       168,
       '实时呼吸率',
-      '16',
+      data.realtime.breathRate.toString(),
       '次/分',
       blue,
       false,
@@ -1620,8 +2401,26 @@ class _ShowroomPainter extends CustomPainter {
       weight: FontWeight.w700,
       tracking: 0.7,
     );
-    _drawGaugeCard(x + 22, y + 70, 240, 218, '腰部支撑指数', 84, '优秀', green);
-    _drawGaugeCard(x + 276, y + 70, 227, 218, '人体工程学指数', 80, '良好', blue);
+    _drawGaugeCard(
+      x + 22,
+      y + 70,
+      240,
+      218,
+      '腰部支撑指数',
+      data.trend.lumbarSupportIndex,
+      data.trend.lumbarSupportStatus,
+      green,
+    );
+    _drawGaugeCard(
+      x + 276,
+      y + 70,
+      227,
+      218,
+      '人体工程学指数',
+      data.trend.ergonomicIndex,
+      data.trend.ergonomicStatus,
+      blue,
+    );
     _drawLegend(x + 175, y + 326, green, '当前指数');
     _drawLegend(x + 306, y + 326, _rgb(83, 145, 210, 0.46), '推荐指数');
   }
@@ -1775,10 +2574,16 @@ class _ShowroomPainter extends CustomPainter {
         weight: FontWeight.w400);
     _drawLegend(x + 342, y + 84, blue, '当前气压');
     _drawLegend(x + 430, y + 84, blue.withOpacity(0.5), '推荐气压');
-    _drawChart(x + 22, y + 104, 481, 170);
+    _drawChart(x + 22, y + 104, 481, 170, data.pressureChart);
   }
 
-  void _drawChart(double x, double y, double width, double height) {
+  void _drawChart(
+    double x,
+    double y,
+    double width,
+    double height,
+    MattressPressureChartData chart,
+  ) {
     final Rect rect = Rect.fromLTWH(x, y, width, height);
     _canvas.drawRRect(
       _rrect(rect, 12),
@@ -1808,8 +2613,24 @@ class _ShowroomPainter extends CustomPainter {
         ..strokeWidth = 1,
     );
 
-    final Path line = _pressurePath(x + 50, y + 28, width - 64, 132, 0);
-    final Path recommend = _pressurePath(x + 50, y + 28, width - 64, 132, 18);
+    final Path line = _pressurePath(
+      x + 50,
+      y + 28,
+      width - 64,
+      132,
+      chart.currentValues,
+      chart,
+      0,
+    );
+    final Path recommend = _pressurePath(
+      x + 50,
+      y + 28,
+      width - 64,
+      132,
+      chart.recommendedValues,
+      chart,
+      18,
+    );
     final Path fill = Path.from(line)
       ..lineTo(x + width - 14, y + 160)
       ..lineTo(x + 50, y + 160)
@@ -1844,7 +2665,12 @@ class _ShowroomPainter extends CustomPainter {
         ..strokeCap = StrokeCap.round,
     );
 
-    final double markerX = x + 273;
+    final int markerIndex =
+        chart.markerIndex.clamp(0, math.max(0, chart.currentValues.length - 1));
+    final double markerProgress = chart.currentValues.length <= 1
+        ? 0
+        : markerIndex / (chart.currentValues.length - 1);
+    final double markerX = x + 50 + (width - 64) * markerProgress;
     _canvas.drawLine(
       Offset(markerX, y + 90),
       Offset(markerX, y + 160),
@@ -1867,38 +2693,39 @@ class _ShowroomPainter extends CustomPainter {
       blue.withOpacity(0.45),
       14,
     );
-    _drawText('7056 Pa',
+    _drawText('${chart.visibleMarkerValue.round()} Pa',
         x: tag.center.dx,
         y: y + 77,
         size: 15,
         color: Colors.white,
         align: _CanvasTextAlign.center,
         weight: FontWeight.w700);
-    _drawText('10000',
+    _drawText(chart.maxValue.round().toString(),
         x: x,
         y: y + 30,
         size: 12,
         color: dim,
         align: _CanvasTextAlign.left,
         weight: FontWeight.w400);
-    _drawText('7500',
+    _drawText(((chart.maxValue + chart.minValue) / 2).round().toString(),
         x: x,
         y: y + 96,
         size: 12,
         color: dim,
         align: _CanvasTextAlign.left,
         weight: FontWeight.w400);
-    _drawText('5000',
+    _drawText(chart.minValue.round().toString(),
         x: x,
         y: y + 162,
         size: 12,
         color: dim,
         align: _CanvasTextAlign.left,
         weight: FontWeight.w400);
-    const List<String> labels = <String>['肩部', '背部', '腰部', '臀部', '腿部'];
-    for (int i = 0; i < labels.length; i += 1) {
-      _drawText(labels[i],
-          x: x + 64 + i * 100,
+    for (int i = 0; i < chart.labels.length; i += 1) {
+      final double progress =
+          chart.labels.length <= 1 ? 0 : i / (chart.labels.length - 1);
+      _drawText(chart.labels[i],
+          x: x + 50 + (width - 64) * progress,
           y: y + 190,
           size: 14,
           color: muted,
@@ -1907,9 +2734,23 @@ class _ShowroomPainter extends CustomPainter {
     }
   }
 
-  void _drawChartDynamic(double x, double y, double width, double height) {
+  void _drawChartDynamic(
+    double x,
+    double y,
+    double width,
+    double height,
+    MattressPressureChartData chart,
+  ) {
     final double phase = _phase(3.6);
-    final Path line = _pressurePath(x + 50, y + 28, width - 64, 132, 0);
+    final Path line = _pressurePath(
+      x + 50,
+      y + 28,
+      width - 64,
+      132,
+      chart.currentValues,
+      chart,
+      0,
+    );
     final Path trimmed = _trimPath(line, 0, math.max(0.02, phase));
     _canvas.drawPath(
       trimmed,
@@ -1997,6 +2838,7 @@ class _ShowroomPainter extends CustomPainter {
   }
 
   void _drawCompactShowroomCard(double x, double y) {
+    final MattressModeMetrics metrics = data.metricsFor(mode);
     final Rect rect = Rect.fromLTWH(x, y, 301, 222);
     _drawPanel(rect, 8);
     _withClipRRect(_rrect(rect, 8), () {
@@ -2046,8 +2888,8 @@ class _ShowroomPainter extends CustomPainter {
         x + 20 + i * 53,
         y + 151,
         label,
-        (mode.pressureValues[key] ?? 0).toDouble(),
-        mode.warningKey == key,
+        (metrics.pressureValues[key] ?? 0).toDouble(),
+        (metrics.warningKey ?? mode.warningKey) == key,
       );
     }
   }
@@ -2425,32 +3267,46 @@ class _ShowroomPainter extends CustomPainter {
   }
 
   Path _pressurePath(
-      double x, double y, double width, double height, double offset) {
-    return Path()
-      ..moveTo(x, y + height * 0.56 + offset)
-      ..cubicTo(
-          x + width * 0.08,
-          y + height * 0.34 + offset,
-          x + width * 0.14,
-          y + height * 0.12 + offset,
-          x + width * 0.25,
-          y + height * 0.22 + offset)
-      ..cubicTo(
-          x + width * 0.34,
-          y + height * 0.28 + offset,
-          x + width * 0.40,
-          y + height * 0.50 + offset,
-          x + width * 0.48,
-          y + height * 0.42 + offset)
-      ..cubicTo(
-          x + width * 0.58,
-          y + height * 0.40 + offset,
-          x + width * 0.60,
-          y + height * 0.10 + offset,
-          x + width * 0.68,
-          y + height * 0.24 + offset)
-      ..cubicTo(x + width * 0.78, y + height * 0.36 + offset, x + width * 0.86,
-          y + height * 0.54 + offset, x + width, y + height * 0.60 + offset);
+    double x,
+    double y,
+    double width,
+    double height,
+    List<double> values,
+    MattressPressureChartData chart,
+    double offset,
+  ) {
+    if (values.isEmpty) {
+      return Path();
+    }
+
+    double valueY(double value) {
+      final double range = math.max(1, chart.maxValue - chart.minValue);
+      final double normalized = ((value - chart.minValue) / range).clamp(0, 1);
+      return y + height - height * normalized + offset;
+    }
+
+    final Path path = Path()..moveTo(x, valueY(values.first));
+    if (values.length == 1) {
+      return path..lineTo(x + width, valueY(values.first));
+    }
+
+    final double step = width / (values.length - 1);
+    for (int index = 1; index < values.length; index += 1) {
+      final double previousX = x + step * (index - 1);
+      final double currentX = x + step * index;
+      final double previousY = valueY(values[index - 1]);
+      final double currentY = valueY(values[index]);
+      final double controlX = previousX + step * 0.5;
+      path.cubicTo(
+        controlX,
+        previousY,
+        controlX,
+        currentY,
+        currentX,
+        currentY,
+      );
+    }
+    return path;
   }
 
   void _drawWifi(double x, double y) {
@@ -2810,6 +3666,14 @@ const String _smartMattressBridgeScript = r'''
     if (!button) return false;
     button.click();
     return true;
+  };
+
+  window.__smartMattressSetDashboardData = function(dashboardData) {
+    if (window.SmartMattress3D && window.SmartMattress3D.setDashboardData) {
+      window.SmartMattress3D.setDashboardData(dashboardData);
+      return true;
+    }
+    return false;
   };
 
   window.__smartMattressSetHeating = function(heating) {

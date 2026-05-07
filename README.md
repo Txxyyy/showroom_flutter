@@ -68,28 +68,149 @@ iOS 端使用本地 HTTP asset server 加载同一套 Three.js 资源。
 flutter pub get
 ```
 
+## 移动端开发工作流
+
+本仓库使用技能编排式移动端开发工作流。流程按轻量、标准、严格三级执行，目标是用最少交付物换取清晰需求、可验证实现和可恢复上下文：
+
+- `brainstorming`：需求收敛、方案比较、设计确认。
+- `writing-plans`：把确认后的设计拆成可执行的 TDD 任务计划。
+- `using-git-worktrees`：按功能点创建独立 worktree，支持多会话并行；文档和单点小修可按风险跳过。
+- `test-driven-development`：按 RED / GREEN / REFACTOR 实现行为变更。
+- `verification-before-completion` 和 `requesting-code-review`：完成前验证和评审。
+- `finishing-a-development-branch`：决定本地合并、创建 PR、保留或丢弃。
+
+详细流程见：
+
+```text
+docs/mobile-development-workflow.md
+```
+
+项目状态更新见：
+
+```text
+docs/project-status.md
+```
+
+创建独立任务工作区：
+
+```bash
+git worktree add .worktrees/<task-name> -b codex/feature-<task-name> main
+cd .worktrees/<task-name>
+flutter pub get
+flutter analyze
+flutter test
+```
+
 ## 本地运行
 
 iOS 模拟器：
 
 ```bash
-flutter run -d <ios-simulator-id>
+flutter run -d <ios-simulator-id> --flavor dev --dart-define=APP_ENV=dev
 ```
 
 Android 模拟器或设备：
 
 ```bash
-flutter run -d <android-device-id>
+flutter run -d <android-device-id> --flavor dev --dart-define=APP_ENV=dev
 ```
 
 应用启动后会锁定横屏，并进入沉浸式全屏显示。
+
+## Flavor 命令
+
+```bash
+flutter run --flavor dev --dart-define=APP_ENV=dev
+flutter run --flavor staging --dart-define=APP_ENV=staging
+flutter run --flavor prod --dart-define=APP_ENV=prod
+```
+
+## 仪表盘数据与 Mock 展示
+
+展厅仪表盘数据已从绘制逻辑中抽离为 `MattressDashboardData` 和 `MattressDashboardController`。心率、呼吸、趋势指标、压力折线图、各模式分区压力值和 3D 床垫气囊目标值，都可以通过外部传值更新；Flutter UI 与 WebView Three.js 场景会跟随同一份数据刷新。
+
+dev 环境默认启用 2 秒一次的 mock 数据流，用于在模拟器上观察运行时变化：
+
+```bash
+flutter run -d <ios-simulator-id> --flavor dev --dart-define=APP_ENV=dev --dart-define=SHOWROOM_MOCK_STREAM=true
+```
+
+关闭 mock 数据流：
+
+```bash
+flutter run -d <ios-simulator-id> --flavor dev --dart-define=APP_ENV=dev --dart-define=SHOWROOM_MOCK_STREAM=false
+```
+
+接入真实数据源时，推荐把 HTTP polling、WebSocket、蓝牙、平台通道或本地 fixture replay 适配成 `Stream<Map<String, Object?>>`，再传入应用：
+
+```dart
+SmartMattressShowroomApp(
+  config: AppEnvironmentConfig.current,
+  dashboardPayloadStream: someStreamOfMapPayloads,
+);
+```
+
+如果业务侧需要主动推送局部更新，也可以持有 controller：
+
+```dart
+final MattressDashboardController controller = MattressDashboardController();
+
+SmartMattressShowroomApp(
+  config: AppEnvironmentConfig.current,
+  dashboardController: controller,
+);
+
+controller.applyPayload(payload);
+```
+
+`applyPayload` 支持增量更新，未传字段会保留当前值。示例 payload：
+
+```dart
+controller.applyPayload(<String, Object?>{
+  'realtime': <String, Object?>{
+    'heartRate': 91,
+    'breathRate': 20,
+  },
+  'trend': <String, Object?>{
+    'lumbarSupportIndex': 93,
+    'lumbarSupportStatus': '稳定',
+    'ergonomicIndex': 86,
+    'ergonomicStatus': '良好',
+  },
+  'pressureChart': <String, Object?>{
+    'currentValues': <double>[7010, 7450, 8020, 7680, 7220],
+    'recommendedValues': <double>[6800, 7600, 7400, 8100, 6900],
+    'markerIndex': 2,
+    'markerValue': 8020,
+  },
+  'modes': <String, Object?>{
+    'left': <String, Object?>{
+      'values': <String, int>{
+        'shoulder': 71,
+        'back': 72,
+        'waist': 73,
+        'hip': 74,
+        'leg': 75,
+      },
+      'targets': <String, Object?>{
+        'waist': <String, Object?>{
+          'pressure': 0.77,
+          'glow': 0.88,
+        },
+      },
+    },
+  },
+});
+```
+
+压力分区 key 固定为 `shoulder`、`back`、`waist`、`hip`、`leg`；模式 key 使用 `auto`、`zero`、`left`、`right`、`deep`、`flat`。`values` 范围会限制在 `0..100`，`targets.pressure` 和 `targets.glow` 范围会限制在 `0..1`。
 
 ## 构建 APK
 
 普通 release APK：
 
 ```bash
-flutter build apk --release
+flutter build apk --release --flavor prod --dart-define=APP_ENV=prod
 ```
 
 产物位置：
@@ -101,7 +222,7 @@ build/app/outputs/flutter-apk/app-release.apk
 按 CPU 架构拆包，适合真实设备分发：
 
 ```bash
-flutter build apk --release --split-per-abi
+flutter build apk --release --flavor prod --dart-define=APP_ENV=prod --split-per-abi
 ```
 
 产物位置：
@@ -125,7 +246,7 @@ flutter run -d <ios-simulator-id>
 编译 iOS release：
 
 ```bash
-flutter build ios --release
+flutter build ios --release --flavor prod --dart-define=APP_ENV=prod
 ```
 
 如果需要真机签名，请在 Xcode 中配置 Team、Bundle Identifier 和 Provisioning Profile。
@@ -133,9 +254,11 @@ flutter build ios --release
 ## 验证命令
 
 ```bash
+dart format lib test
 flutter analyze
 flutter test
-flutter build apk --release
+flutter build apk --debug --flavor dev --dart-define=APP_ENV=dev
+flutter build ios --simulator --debug --flavor dev --dart-define=APP_ENV=dev
 ```
 
 说明：部分本地环境中 `flutter test` 可能受 Flutter 测试 harness WebSocket 连接影响失败，需要结合当前 Flutter SDK 与本机测试环境排查。

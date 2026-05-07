@@ -25603,6 +25603,70 @@ void main() {
   };
   var currentMode = "auto";
   var hovered;
+  function normalizeModeMetrics(mode, metrics = {}) {
+    const current = modes[mode];
+    if (!current || !metrics || typeof metrics !== "object") return null;
+    const next = {
+      ...current,
+      values: { ...current.values },
+      targets: { ...current.targets }
+    };
+    if (metrics.values && typeof metrics.values === "object") {
+      zones.forEach((zone) => {
+        const value = Number(metrics.values[zone.key]);
+        if (Number.isFinite(value)) {
+          next.values[zone.key] = MathUtils.clamp(Math.round(value), 0, 100);
+        }
+      });
+    }
+    if (metrics.targets && typeof metrics.targets === "object") {
+      zones.forEach((zone) => {
+        const target = metrics.targets[zone.key];
+        if (!target || typeof target !== "object") return;
+        const pressure = Number(target.pressure);
+        const glow = Number(target.glow);
+        next.targets[zone.key] = {
+          pressure: Number.isFinite(pressure) ? MathUtils.clamp(pressure, 0, 1) : next.targets[zone.key].pressure,
+          glow: Number.isFinite(glow) ? MathUtils.clamp(glow, 0, 1) : next.targets[zone.key].glow
+        };
+      });
+    }
+    if (metrics.warning !== void 0) {
+      next.warning = typeof metrics.warning === "string" ? metrics.warning : null;
+    }
+    return next;
+  }
+  function setModeData(mode, metrics = {}, options = {}) {
+    const next = normalizeModeMetrics(mode, metrics);
+    if (!next) return false;
+    modes[mode] = next;
+    if (mode === currentMode) {
+      updateBars(next.values);
+      applyZoneTargets(next, next.reveal);
+      requestRender(settleTiming.reveal);
+    }
+    if (options.postEvent !== false) {
+      postAppEvent("modeData", { mode });
+    }
+    return true;
+  }
+  function setDashboardData(payload = {}) {
+    const source = payload.modes && typeof payload.modes === "object" ? payload.modes : payload;
+    if (!source || typeof source !== "object") return false;
+    const updatedModes = [];
+    Object.entries(source).forEach(([mode, metrics]) => {
+      if (setModeData(mode, metrics, { postEvent: false })) {
+        updatedModes.push(mode);
+      }
+    });
+    if (updatedModes.length === 0) return false;
+    const config = modes[currentMode] || modes.flat;
+    updateBars(config.values);
+    applyZoneTargets(config, config.reveal);
+    requestRender(settleTiming.reveal);
+    postAppEvent("dashboardData", { modes: updatedModes });
+    return true;
+  }
   function applyZoneTargets(config, coolDown = false) {
     const targetConfig = coolDown ? modes.flat : config;
     zoneMeshes.forEach((root) => {
@@ -26013,6 +26077,7 @@ void main() {
     appConfig = { ...appConfig, ...options };
     if (options.showUI !== void 0) setUIVisible(Boolean(options.showUI));
     if (options.embedded !== void 0) setUIVisible(!Boolean(options.embedded));
+    if (options.dashboardData) setDashboardData(options.dashboardData);
     if (options.heating) setHeating(options.heating);
     if (options.mode) setMode(options.mode);
     if (options.autorun === false && currentMode !== "flat") setMode("flat");
@@ -26026,6 +26091,8 @@ void main() {
     version: "1.2.2-glb-reveal-parity",
     configure: configureApp,
     setMode,
+    setModeData,
+    setDashboardData,
     startSideAdjustment,
     stopSideAdjustment,
     startBladder,
@@ -26055,6 +26122,7 @@ void main() {
       leg: ["barLeg", "txtLeg"]
     };
     Object.entries(values).forEach(([key, value]) => {
+      if (!ids[key]) return;
       document.querySelector(`#${ids[key][0]}`).style.setProperty("--value", `${value}%`);
       document.querySelector(`#${ids[key][1]}`).textContent = `${value}%`;
     });
