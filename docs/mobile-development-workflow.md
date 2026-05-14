@@ -1,6 +1,6 @@
 # 移动端开发工作流
 
-本文档定义 `showroom_flutter` 的 AI 协作开发工作流。原则只有一句：流程服务于开发，交付物服务于决策和验证。能用一次对话、一个清单、一条验证记录说清楚的事情，不额外写长文档。
+本文档定义 `showroom_flutter` 的 AI 协作开发工作流。主流程基于 Superpowers 子技能，项目原则只有一句：流程服务于开发，交付物服务于决策和验证。能用一次对话、一个清单、一条验证记录说清楚的事情，不额外写长文档。
 
 ## 1. 流程分级
 
@@ -9,7 +9,7 @@
 | 等级 | 适用场景 | 必走节点 | 交付物 |
 | --- | --- | --- | --- |
 | 轻量 | 文档、注释、小配置、单文件无行为变更 | 假设与成功标准、修改、最小验证 | 对话记录即可，必要时更新状态文档 |
-| 标准 | 常规功能、bug fix、UI 状态变化、跨 2-4 个文件 | 需求卡、短计划、worktree、TDD、质量门、状态更新 | `brief` 或一页计划 |
+| 标准 | 常规功能、bug fix、UI 状态变化、跨 2-4 个文件 | `superpowers:brainstorming`、`superpowers:writing-plans`、worktree、TDD 或系统调试、质量门、状态更新 | `brief` 或一页计划 |
 | 严格 | 架构、平台配置、发布、多会话并行、高风险能力 | 完整需求收敛、完整计划、独立 worktree、分层测试、评审、收尾决策 | `docs/plans/` 文档、验证和评审证据 |
 
 升级条件：
@@ -29,25 +29,30 @@
 
 ```mermaid
 flowchart TD
-  A["需求下发"] --> B{"判断等级"}
+  A["需求下发"] --> A1["superpowers:using-superpowers: 判断适用技能"]
+  A1 --> B{"判断等级"}
   B -- "轻量" --> C["假设 + 成功标准"]
-  B -- "标准/严格" --> D["brainstorming: 需求收敛"]
+  B -- "标准/严格" --> D["superpowers:brainstorming: 需求收敛"]
   D --> E{"用户确认?"}
   E -- "否" --> D
-  E -- "是" --> F["writing-plans: 开发计划"]
+  E -- "是" --> F["superpowers:writing-plans: 开发计划"]
   C --> G{"需要隔离开发?"}
   F --> G
-  G -- "需要" --> H["using-git-worktrees"]
+  G -- "需要" --> H["superpowers:using-git-worktrees"]
   G -- "不需要" --> I["当前安全分支"]
-  H --> J["TDD: RED / GREEN / REFACTOR"]
+  H --> J{"任务类型"}
   I --> J
-  J --> K["format / analyze / test / build / 设备化验证"]
+  J -- "功能/行为变更" --> T["superpowers:test-driven-development: RED / GREEN / REFACTOR"]
+  J -- "bug/失败/异常" --> S["superpowers:systematic-debugging: 先查根因"]
+  S --> T
+  T --> K["superpowers:verification-before-completion: 新鲜验证证据"]
   K --> L{"需要评审?"}
-  L -- "需要" --> M["requesting-code-review"]
+  L -- "需要" --> M["superpowers:requesting-code-review"]
   L -- "不需要" --> N["自检"]
-  M --> O["更新项目状态"]
+  M --> R["superpowers:receiving-code-review: 逐项核实并处理"]
+  R --> O["更新项目状态"]
   N --> O
-  O --> P["合并、PR、保留或丢弃"]
+  O --> P["superpowers:finishing-a-development-branch: 合并、PR、保留或丢弃"]
 ```
 
 ## 3. 节点交付物
@@ -59,10 +64,11 @@ flowchart TD
 | 需求下发 | 明确做什么 | 一句话目标 | 默认不写文件 |
 | 需求收敛 | 收敛范围和验收 | 需求卡：目标、非目标、验收、待确认 | 标准/严格任务 |
 | 方案确认 | 避免做错方向 | 用户确认的推荐方案 | 严格任务 |
-| 开发计划 | 拆成可执行动作 | 文件范围、TDD 点、验证命令 | 标准/严格任务 |
+| 开发计划 | 拆成可执行动作 | 文件范围、TDD 点、逐步命令、验证命令 | 标准/严格任务 |
 | worktree | 隔离开发状态 | 分支名、路径、基线状态 | 有代码功能或并行开发 |
 | 并行执行 | 让独立功能点同时推进 | 并行执行矩阵：Agent、worktree、分支、职责、可写范围、验证、集成顺序 | 严格任务且启用多 agent |
 | TDD | 用测试驱动行为 | RED 失败证据、GREEN 通过证据 | 行为变更 |
+| 系统调试 | 避免猜测式修复 | 复现步骤、根因、假设、最小验证 | bug、测试失败、构建失败、运行异常 |
 | 质量门 | 防止未验证交付 | 命令和结果 | 每次收尾 |
 | 设备化验证 | 确认真实移动运行时和视觉效果 | 设备、场景、截图/录屏/日志、结论 | UI、交互、WebView、平台能力、严格任务 |
 | 代码评审 | 捕获遗漏和回归 | findings、修复结果或接受风险 | 严格任务、合并前 |
@@ -80,40 +86,55 @@ flowchart TD
 | 技能 | 何时使用 | 输出 |
 | --- | --- | --- |
 | `karpathy-guidelines` | 编码、评审、重构、调试前 | 假设、成功标准、最小改动边界 |
-| `brainstorming` | 需求不清、方案有取舍、标准/严格任务 | 需求卡或方案确认 |
-| `writing-plans` | 超过单点小改、需要 TDD 拆解、多会话协作 | 开发计划 |
-| `using-git-worktrees` | 功能开发、bug fix、并行会话、风险隔离 | worktree 路径和分支 |
-| `test-driven-development` | 新功能、bug fix、行为变更 | RED / GREEN / REFACTOR 证据 |
-| `dispatching-parallel-agents` | 多个独立问题可并行调查或实现 | Agent 分工和结果汇总 |
-| `subagent-driven-development` | 一个计划内存在多个独立任务 | 子任务执行结果 |
-| `executing-plans` | 另一个会话执行完整计划 | 按计划完成的任务记录 |
-| `verification-before-completion` | 完成前 | 新鲜验证结果 |
-| `requesting-code-review` | 严格任务、合并前、高风险文件 | 评审 findings 和处理结果 |
-| `finishing-a-development-branch` | 分支完成后 | 合并、PR、保留或丢弃决策 |
+| `superpowers:using-superpowers` | 每次进入任务先判断是否有适用子技能 | 本次要使用的技能清单 |
+| `superpowers:brainstorming` | 创造性工作、功能设计、行为改动、标准/严格任务 | 2-3 个方案、推荐方案、用户确认后的设计 |
+| `superpowers:writing-plans` | 已有设计或需求，需要拆成多步实现 | `docs/plans/YYYY-MM-DD-<feature>.md` 实施计划 |
+| `superpowers:using-git-worktrees` | 功能开发、bug fix、并行会话、风险隔离 | worktree 路径、分支、基线验证 |
+| `superpowers:test-driven-development` | 新功能、bug fix、重构、行为变更 | RED / GREEN / REFACTOR 证据 |
+| `superpowers:systematic-debugging` | bug、测试失败、构建失败、异常行为 | 根因调查、单一假设、最小修复 |
+| `superpowers:dispatching-parallel-agents` | 多个独立问题可并行调查或实现 | Agent 分工和结果汇总 |
+| `superpowers:subagent-driven-development` | 当前会话执行一个计划内多个独立任务 | 每任务实现、规格评审、质量评审 |
+| `superpowers:executing-plans` | 另一个会话执行完整计划 | 按计划分批完成的任务记录 |
+| `superpowers:verification-before-completion` | 完成、提交、PR、合并前 | 新鲜验证结果 |
+| `superpowers:requesting-code-review` | 严格任务、合并前、高风险文件 | 评审 findings |
+| `superpowers:receiving-code-review` | 收到人工或 agent 评审意见后 | 逐项核实、修复或技术性反驳 |
+| `superpowers:finishing-a-development-branch` | 分支完成后 | 合并、PR、保留或丢弃决策 |
 
 技能路径：
 
 ```text
 /Users/tanxiaoyi/.claude/skills/pm-ai-playbook/skills/agentic-skills/karpathy-guidelines/SKILL.md
-/Users/tanxiaoyi/.claude/skills/brainstorming/SKILL.md
-/Users/tanxiaoyi/.claude/skills/writing-plans/SKILL.md
+/Users/tanxiaoyi/.claude/skills/superpowers/SKILL.md
+/Users/tanxiaoyi/.claude/skills/superpowers/skills/using-superpowers/SKILL.md
+/Users/tanxiaoyi/.claude/skills/superpowers/skills/brainstorming/SKILL.md
+/Users/tanxiaoyi/.claude/skills/superpowers/skills/writing-plans/SKILL.md
 /Users/tanxiaoyi/.claude/skills/superpowers/skills/using-git-worktrees/SKILL.md
 /Users/tanxiaoyi/.claude/skills/superpowers/skills/test-driven-development/SKILL.md
+/Users/tanxiaoyi/.claude/skills/superpowers/skills/systematic-debugging/SKILL.md
 /Users/tanxiaoyi/.claude/skills/superpowers/skills/dispatching-parallel-agents/SKILL.md
 /Users/tanxiaoyi/.claude/skills/superpowers/skills/subagent-driven-development/SKILL.md
-/Users/tanxiaoyi/.claude/skills/executing-plans/SKILL.md
+/Users/tanxiaoyi/.claude/skills/superpowers/skills/executing-plans/SKILL.md
 /Users/tanxiaoyi/.claude/skills/superpowers/skills/verification-before-completion/SKILL.md
-/Users/tanxiaoyi/.claude/skills/requesting-code-review/SKILL.md
+/Users/tanxiaoyi/.claude/skills/superpowers/skills/requesting-code-review/SKILL.md
+/Users/tanxiaoyi/.claude/skills/superpowers/skills/receiving-code-review/SKILL.md
 /Users/tanxiaoyi/.claude/skills/superpowers/skills/finishing-a-development-branch/SKILL.md
 ```
 
 ## 5. 执行规则
 
+### 技能入口
+
+- 每次任务先判断 Superpowers 子技能是否适用；如果适用，在行动前说明“正在使用 `<skill>` 做 `<purpose>`”。
+- 同时应用 `karpathy-guidelines`：先写假设、成功标准和最小改动边界。
+- 用户指令定义“做什么”，Superpowers 子技能定义“怎么做”。不要因为任务看起来简单就跳过适用技能。
+- 轻量文档任务可以不生成设计文档和计划文件，但仍要写清假设、成功标准和验证方式。
+
 ### 需求和计划
 
 - 轻量任务：在对话中写清假设、成功标准和验证方式即可。
 - 标准任务：用 `docs/templates/requirement-brief-template.md` 或 `docs/templates/mobile-feature-plan-template.md`。
-- 严格任务：需求收敛后等待用户确认，再写计划并执行。
+- 标准/严格任务：先用 `superpowers:brainstorming` 提出 2-3 个方案，拿到用户确认后，再用 `superpowers:writing-plans` 写实施计划。
+- 严格任务：需求收敛后等待用户确认，设计和计划进入 `docs/plans/`，再创建 worktree 执行。
 - 一次只问一个会影响范围或验收的问题。
 
 计划只回答五件事：
@@ -124,9 +145,16 @@ flowchart TD
 - 怎么验证通过。
 - 状态文档更新什么。
 
+`writing-plans` 生成的实施计划必须包含：
+
+- `# <Feature Name> Implementation Plan` 标题。
+- `> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.`。
+- Goal、Architecture、Tech Stack。
+- 每个任务的精确文件路径、测试步骤、运行命令、预期结果和提交点。
+
 ### worktree
 
-本仓库统一使用 `.worktrees/`，目录已加入 `.gitignore`。创建前检查：
+本仓库统一使用 `.worktrees/`，目录已加入 `.gitignore`。使用 `superpowers:using-git-worktrees` 时按这个顺序处理：先找 `.worktrees/`，再找 `worktrees/`，再看仓库说明；本仓库固定选 `.worktrees/`。创建前检查：
 
 ```bash
 git check-ignore -v .worktrees/
@@ -139,6 +167,16 @@ git worktree add .worktrees/<topic> -b codex/<type>-<topic> main
 cd .worktrees/<topic>
 flutter pub get
 ```
+
+基线检查按任务风险选择，标准功能默认先跑：
+
+```bash
+dart format --output=none --set-exit-if-changed lib test
+flutter analyze
+flutter test
+```
+
+如果基线检查失败，先报告失败，不要把失败混入新任务。
 
 可以跳过新 worktree：
 
@@ -154,7 +192,7 @@ flutter pub get
 
 ### TDD
 
-行为变更默认走：
+新功能、bug fix、重构和行为变更默认使用 `superpowers:test-driven-development`：
 
 ```text
 RED：写最小失败测试
@@ -170,7 +208,23 @@ REFACTOR：只清理本次改动产生的问题
 - 探索性 spike 可以先验证方向，但正式实现必须回到 TDD。
 - WebView、3D、平台通道难以单测时，先抽出可测试逻辑，再补人工或集成验证。
 
+### 系统调试
+
+遇到 bug、测试失败、构建失败或运行异常，先使用 `superpowers:systematic-debugging`，不要直接猜修复。
+
+调试顺序：
+
+1. 读完整错误、复现问题、检查近期改动。
+2. 多组件问题先加诊断或抓日志，定位是哪一层坏了。
+3. 找仓库里相似的正常实现，逐项比较差异。
+4. 写出单一假设，用最小实验验证。
+5. 确认根因后再写失败测试或最小复现，然后修复。
+
+如果连续 3 次修复假设失败，暂停并重新讨论架构或方向。
+
 ### 质量门
+
+完成前必须使用 `superpowers:verification-before-completion`：先识别能证明结论的命令，再运行完整命令，读输出和退出码，然后才能说通过。
 
 按变更类型选择最小检查。
 
@@ -184,6 +238,8 @@ REFACTOR：只清理本次改动产生的问题
 | 发布配置 | release build、签名/证书状态记录、关键路径设备 smoke |
 
 没有运行的检查必须写“未运行”和原因。失败检查必须记录关键错误和下一步，不能写成通过。
+
+禁止用“应该通过”“看起来没问题”“之前跑过”代替新鲜验证证据。
 
 #### 设备化验证
 
@@ -239,7 +295,7 @@ docs/validation/YYYY-MM-DD-<topic>/
 
 ### 多 agent 并行开发
 
-多 agent 并行是严格流程里的可选加速器。核心规则：
+多 agent 并行是严格流程里的可选加速器，对应 `superpowers:dispatching-parallel-agents` 和 `superpowers:subagent-driven-development`。核心规则：
 
 ```text
 多 agent 只并行实现，不并行决策；主会话负责需求、架构、接口、集成和最终质量。
@@ -247,10 +303,11 @@ docs/validation/YYYY-MM-DD-<topic>/
 
 启用条件：
 
-- 需求已经通过 `brainstorming` 收敛，并有用户确认的方案。
+- 需求已经通过 `superpowers:brainstorming` 收敛，并有用户确认的方案。
 - 开发计划已经拆出互相独立的功能点。
 - 每个功能点有明确可写范围，且不会频繁修改同一批文件。
 - 共享接口、共享模型、路由、主题、状态管理已经先由主会话串行落地。
+- 用户明确要求子 agent、并行 agent 或可在当前环境中使用子 agent。
 
 不启用条件：
 
@@ -336,11 +393,29 @@ LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 flutter build ios --simulator --debug --flav
 | --- | --- |
 | 功能点互相依赖 | 一个 worktree 顺序开发 |
 | 功能点独立且文件范围不同 | 每个功能点一个 worktree |
-| 多个失败根因独立 | 使用 `dispatching-parallel-agents` 调查 |
-| 一个计划内多个独立任务 | 使用 `subagent-driven-development` |
-| 另一个会话执行完整计划 | 新会话使用 `executing-plans` |
+| 多个失败根因独立 | 使用 `superpowers:dispatching-parallel-agents` 调查 |
+| 一个计划内多个独立任务，且留在当前会话 | 使用 `superpowers:subagent-driven-development`，每个任务后做规格评审和代码质量评审 |
+| 另一个会话执行完整计划 | 新会话使用 `superpowers:executing-plans`，每 3 个任务一批汇报 |
 
 并行前必须写清分支名、worktree 路径、写入范围、集成顺序。
+
+### 代码评审
+
+使用 `superpowers:requesting-code-review` 的场景：
+
+- 严格任务或高风险文件完成后。
+- 子 agent 每个任务完成后。
+- 合并到基线分支前。
+- 复杂 bug 修复后需要第二视角。
+
+收到评审反馈后使用 `superpowers:receiving-code-review`：
+
+- 先完整阅读，再用自己的话确认技术要求。
+- 逐项对照代码验证，不盲目照做。
+- 人类反馈优先，但范围不清时先问。
+- 外部或 agent 反馈要检查是否符合本仓库、是否破坏现有行为、是否违反 YAGNI。
+- Critical 立即修，Important 在继续前修，Minor 可记录为后续事项。
+- 修复后运行对应验证，不用口头同意代替结果。
 
 ## 6. 状态和收尾
 
@@ -371,6 +446,8 @@ docs/project-status.md
 ```
 
 丢弃工作必须让用户明确确认。合并后清理不再使用的 worktree。
+
+使用 `superpowers:finishing-a-development-branch` 时必须先确认测试或质量门通过，再提供以上四个选项。不能在失败状态下合并、创建 PR 或声明完成。
 
 ## 7. 外部基准
 

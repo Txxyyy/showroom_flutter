@@ -974,13 +974,761 @@ class SmartMattressShowroomApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       title: config.appTitle,
       color: Colors.black,
-      home: ShowroomDashboardPage(
-        dashboardData: dashboardData,
-        dashboardController: dashboardController,
-        dashboardPayloadStream: dashboardPayloadStream,
+      home: Builder(
+        builder: (BuildContext context) {
+          return ShowroomHomePage(
+            onEnterSmartMattress: () {
+              Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (BuildContext context) {
+                    return ShowroomDashboardPage(
+                      dashboardData: dashboardData,
+                      dashboardController: dashboardController,
+                      dashboardPayloadStream: dashboardPayloadStream,
+                    );
+                  },
+                ),
+              );
+            },
+          );
+        },
       ),
     );
   }
+}
+
+class ShowroomHomePage extends StatelessWidget {
+  const ShowroomHomePage({
+    required this.onEnterSmartMattress,
+    this.onEnterLightSmartMattress,
+    super.key,
+  });
+
+  final VoidCallback onEnterSmartMattress;
+  final VoidCallback? onEnterLightSmartMattress;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: Stack(
+        fit: StackFit.expand,
+        children: <Widget>[
+          const RepaintBoundary(
+            child: CustomPaint(
+              painter: _HomeBackgroundPainter(),
+              size: Size.infinite,
+            ),
+          ),
+          SafeArea(
+            child: LayoutBuilder(
+              builder: (BuildContext context, BoxConstraints constraints) {
+                final bool stacked = constraints.maxWidth < 720;
+                final EdgeInsets padding = EdgeInsets.symmetric(
+                  horizontal: stacked ? 24 : 76,
+                  vertical: stacked ? 22 : 42,
+                );
+
+                return Padding(
+                  padding: padding,
+                  child: Center(
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 1360),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: <Widget>[
+                          const _HomeHeader(),
+                          SizedBox(height: stacked ? 18 : 42),
+                          Expanded(
+                            child: stacked
+                                ? Column(
+                                    children: <Widget>[
+                                      Expanded(
+                                        child: _HomeEntryCard(
+                                          title: '智能床垫大屏入口',
+                                          eyebrow: 'SMART MATTRESS',
+                                          status: '在线',
+                                          summary: '实时监测、分区调节、3D床垫联动展示',
+                                          metrics: const <String>[
+                                            '心率',
+                                            '呼吸',
+                                            '气压',
+                                          ],
+                                          icon: Icons.king_bed_outlined,
+                                          accent: _rgb(57, 215, 255),
+                                          onTap: onEnterSmartMattress,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 16),
+                                      Expanded(
+                                        child: _HomeEntryCard(
+                                          title: '轻智能床垫大屏入口',
+                                          eyebrow: 'LIGHT SMART',
+                                          status: '待接入',
+                                          summary: '轻量监测入口，保留同屏展示位',
+                                          metrics: const <String>[
+                                            '轻量',
+                                            '睡眠',
+                                            '概览',
+                                          ],
+                                          icon: Icons.bedtime_outlined,
+                                          accent: _rgb(71, 216, 147),
+                                          onTap: () =>
+                                              _handleLightSmartMattress(
+                                                  context),
+                                        ),
+                                      ),
+                                    ],
+                                  )
+                                : Row(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.stretch,
+                                    children: <Widget>[
+                                      Expanded(
+                                        child: _HomeEntryCard(
+                                          title: '智能床垫大屏入口',
+                                          eyebrow: 'SMART MATTRESS',
+                                          status: '在线',
+                                          summary: '实时监测、分区调节、3D床垫联动展示',
+                                          metrics: const <String>[
+                                            '心率',
+                                            '呼吸',
+                                            '气压',
+                                          ],
+                                          icon: Icons.king_bed_outlined,
+                                          accent: _rgb(57, 215, 255),
+                                          onTap: onEnterSmartMattress,
+                                        ),
+                                      ),
+                                      const SizedBox(width: 28),
+                                      Expanded(
+                                        child: _HomeEntryCard(
+                                          title: '轻智能床垫大屏入口',
+                                          eyebrow: 'LIGHT SMART',
+                                          status: '待接入',
+                                          summary: '轻量监测入口，保留同屏展示位',
+                                          metrics: const <String>[
+                                            '轻量',
+                                            '睡眠',
+                                            '概览',
+                                          ],
+                                          icon: Icons.bedtime_outlined,
+                                          accent: _rgb(71, 216, 147),
+                                          onTap: () =>
+                                              _handleLightSmartMattress(
+                                                  context),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                          ),
+                          SizedBox(height: stacked ? 16 : 28),
+                          const _HomeStatusStrip(),
+                        ],
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _handleLightSmartMattress(BuildContext context) {
+    final VoidCallback? callback = onEnterLightSmartMattress;
+    if (callback != null) {
+      callback();
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        behavior: SnackBarBehavior.floating,
+        backgroundColor: _rgb(5, 18, 34, 0.96),
+        content: const Text('轻智能床垫大屏入口待接入'),
+      ),
+    );
+  }
+}
+
+class _HomeHeader extends StatelessWidget {
+  const _HomeHeader();
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: <Widget>[
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              Text(
+                'SMART SLEEP SHOWROOM',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: _rgb(57, 215, 255, 0.74),
+                  fontSize: 15,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 2.4,
+                ),
+              ),
+              const SizedBox(height: 10),
+              Text(
+                '智能睡眠展厅',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: _rgb(244, 248, 255),
+                  fontSize: 38,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: 0,
+                  shadows: <Shadow>[
+                    Shadow(
+                      color: _rgb(36, 150, 255, 0.38),
+                      blurRadius: 14,
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(width: 24),
+        const _HomeSignalBadge(),
+      ],
+    );
+  }
+}
+
+class _HomeSignalBadge extends StatelessWidget {
+  const _HomeSignalBadge();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 44,
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      decoration: ShapeDecoration(
+        color: _rgb(26, 111, 210, 0.16),
+        shape: StadiumBorder(
+          side: BorderSide(color: _rgb(86, 184, 255, 0.30)),
+        ),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          Container(
+            width: 8,
+            height: 8,
+            decoration: BoxDecoration(
+              color: _rgb(71, 216, 147),
+              shape: BoxShape.circle,
+              boxShadow: <BoxShadow>[
+                BoxShadow(
+                  color: _rgb(71, 216, 147, 0.8),
+                  blurRadius: 10,
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 10),
+          Text(
+            'READY',
+            style: TextStyle(
+              color: _rgb(198, 224, 255),
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+              fontFamily: 'monospace',
+              letterSpacing: 0,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _HomeEntryCard extends StatelessWidget {
+  const _HomeEntryCard({
+    required this.title,
+    required this.eyebrow,
+    required this.status,
+    required this.summary,
+    required this.metrics,
+    required this.icon,
+    required this.accent,
+    required this.onTap,
+  });
+
+  final String title;
+  final String eyebrow;
+  final String status;
+  final String summary;
+  final List<String> metrics;
+  final IconData icon;
+  final Color accent;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(8),
+        onTap: onTap,
+        child: Ink(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(8),
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: <Color>[
+                _rgb(10, 30, 53, 0.90),
+                _rgb(5, 18, 34, 0.88),
+              ],
+            ),
+            border: Border.all(color: accent.withOpacity(0.28)),
+            boxShadow: <BoxShadow>[
+              BoxShadow(
+                color: Colors.black.withOpacity(0.28),
+                blurRadius: 36,
+                offset: const Offset(0, 20),
+              ),
+            ],
+          ),
+          child: LayoutBuilder(
+            builder: (BuildContext context, BoxConstraints constraints) {
+              final bool compact =
+                  constraints.maxHeight < 360 || constraints.maxWidth < 360;
+              final double padding = compact ? 18 : 28;
+              final double iconSize = compact ? 42 : 54;
+              final double iconGlyphSize = compact ? 24 : 30;
+              final double titleSize = compact ? 24 : 31;
+
+              return ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: Stack(
+                  children: <Widget>[
+                    Positioned(
+                      right: -54,
+                      top: -58,
+                      child: Container(
+                        width: 210,
+                        height: 210,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          gradient: RadialGradient(
+                            colors: <Color>[
+                              accent.withOpacity(0.18),
+                              Colors.transparent,
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                    Positioned.fill(
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: <Color>[
+                              Colors.white.withOpacity(0.035),
+                              Colors.transparent,
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                    Padding(
+                      padding: EdgeInsets.all(padding),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: <Widget>[
+                          Row(
+                            children: <Widget>[
+                              Container(
+                                width: iconSize,
+                                height: iconSize,
+                                decoration: BoxDecoration(
+                                  borderRadius: BorderRadius.circular(8),
+                                  color: accent.withOpacity(0.14),
+                                  border: Border.all(
+                                    color: accent.withOpacity(0.34),
+                                  ),
+                                ),
+                                child: Icon(
+                                  icon,
+                                  color: accent,
+                                  size: iconGlyphSize,
+                                ),
+                              ),
+                              const Spacer(),
+                              _HomeStatusPill(label: status, accent: accent),
+                            ],
+                          ),
+                          const Spacer(),
+                          Text(
+                            eyebrow,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: accent.withOpacity(0.82),
+                              fontSize: compact ? 11 : 13,
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: compact ? 1.2 : 1.8,
+                            ),
+                          ),
+                          SizedBox(height: compact ? 6 : 12),
+                          Text(
+                            title,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: _rgb(244, 248, 255),
+                              fontSize: titleSize,
+                              fontWeight: FontWeight.w900,
+                              letterSpacing: 0,
+                              shadows: <Shadow>[
+                                Shadow(
+                                  color: accent.withOpacity(0.30),
+                                  blurRadius: 12,
+                                ),
+                              ],
+                            ),
+                          ),
+                          SizedBox(height: compact ? 8 : 14),
+                          Text(
+                            summary,
+                            maxLines: compact ? 1 : 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: _rgb(220, 232, 250, 0.70),
+                              fontSize: compact ? 13 : 16,
+                              height: compact ? 1.25 : 1.45,
+                              fontWeight: FontWeight.w400,
+                            ),
+                          ),
+                          SizedBox(height: compact ? 12 : 22),
+                          Wrap(
+                            spacing: compact ? 7 : 10,
+                            runSpacing: compact ? 7 : 10,
+                            children: metrics
+                                .map(
+                                  (String metric) => _HomeMetricChip(
+                                    label: metric,
+                                    accent: accent,
+                                    compact: compact,
+                                  ),
+                                )
+                                .toList(),
+                          ),
+                          const Spacer(),
+                          Align(
+                            alignment: Alignment.centerRight,
+                            child: _HomeEnterButton(
+                              accent: accent,
+                              compact: compact,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _HomeStatusPill extends StatelessWidget {
+  const _HomeStatusPill({required this.label, required this.accent});
+
+  final String label;
+  final Color accent;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 30,
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      decoration: ShapeDecoration(
+        color: accent.withOpacity(0.12),
+        shape: StadiumBorder(
+          side: BorderSide(color: accent.withOpacity(0.30)),
+        ),
+      ),
+      child: Center(
+        child: Text(
+          label,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            color: accent,
+            fontSize: 12,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 0,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _HomeMetricChip extends StatelessWidget {
+  const _HomeMetricChip({
+    required this.label,
+    required this.accent,
+    required this.compact,
+  });
+
+  final String label;
+  final Color accent;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: compact ? 24 : 28,
+      padding: EdgeInsets.symmetric(horizontal: compact ? 9 : 11),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(8),
+        color: _rgb(9, 35, 66, 0.70),
+        border: Border.all(color: accent.withOpacity(0.18)),
+      ),
+      child: Center(
+        child: Text(
+          label,
+          style: TextStyle(
+            color: _rgb(235, 247, 255, 0.82),
+            fontSize: compact ? 11 : 12,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 0,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _HomeEnterButton extends StatelessWidget {
+  const _HomeEnterButton({required this.accent, required this.compact});
+
+  final Color accent;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: compact ? 36 : 42,
+      padding: EdgeInsets.symmetric(horizontal: compact ? 13 : 16),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(8),
+        gradient: LinearGradient(
+          colors: <Color>[
+            accent.withOpacity(0.74),
+            _rgb(18, 85, 178, 0.58),
+          ],
+        ),
+        border: Border.all(color: _rgb(147, 224, 255, 0.60)),
+        boxShadow: <BoxShadow>[
+          BoxShadow(
+            color: accent.withOpacity(0.28),
+            blurRadius: 18,
+          ),
+        ],
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          Text(
+            '进入大屏',
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: compact ? 13 : 14,
+              fontWeight: FontWeight.w900,
+              letterSpacing: 0,
+            ),
+          ),
+          SizedBox(width: compact ? 6 : 8),
+          Icon(
+            Icons.arrow_forward_rounded,
+            color: Colors.white,
+            size: compact ? 16 : 18,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _HomeStatusStrip extends StatelessWidget {
+  const _HomeStatusStrip();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 44,
+      padding: const EdgeInsets.symmetric(horizontal: 18),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(8),
+        color: _rgb(5, 18, 34, 0.66),
+        border: Border.all(color: _rgb(73, 156, 255, 0.18)),
+      ),
+      child: Row(
+        children: <Widget>[
+          Icon(
+            Icons.sensors_rounded,
+            size: 18,
+            color: _rgb(57, 215, 255, 0.80),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              'SHOWROOM ROUTER  |  APP ENVIRONMENT READY  |  DISPLAY MODE LANDSCAPE',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: _rgb(225, 235, 250, 0.58),
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                fontFamily: 'monospace',
+                letterSpacing: 0,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _HomeBackgroundPainter extends CustomPainter {
+  const _HomeBackgroundPainter();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    const Size designSize = Size(_designWidth, _designHeight);
+    final double scale = math.max(
+      size.width / designSize.width,
+      size.height / designSize.height,
+    );
+    final Offset offset = Offset(
+      (size.width - designSize.width * scale) * 0.5,
+      (size.height - designSize.height * scale) * 0.5,
+    );
+
+    canvas.save();
+    canvas.translate(offset.dx, offset.dy);
+    canvas.scale(scale);
+    _paintDesign(canvas);
+    canvas.restore();
+  }
+
+  void _paintDesign(Canvas canvas) {
+    const Rect full = Rect.fromLTWH(0, 0, _designWidth, _designHeight);
+    canvas.drawRect(
+      full,
+      Paint()
+        ..shader = const LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: <Color>[
+            Color(0xff010812),
+            Color(0xff020d1c),
+            Color(0xff010712),
+          ],
+        ).createShader(full),
+    );
+    _fillRadial(
+      canvas,
+      const Offset(960, 540),
+      700,
+      _rgb(36, 150, 255, 0.20),
+    );
+    _fillRadial(
+      canvas,
+      const Offset(320, 190),
+      460,
+      _rgb(57, 215, 255, 0.11),
+    );
+    _fillRadial(
+      canvas,
+      const Offset(1580, 230),
+      460,
+      _rgb(71, 216, 147, 0.09),
+    );
+
+    final Path grid = Path();
+    for (double x = 0; x <= _designWidth; x += 48) {
+      grid
+        ..moveTo(x, 0)
+        ..lineTo(x, _designHeight);
+    }
+    for (double y = 0; y <= _designHeight; y += 48) {
+      grid
+        ..moveTo(0, y)
+        ..lineTo(_designWidth, y);
+    }
+    canvas.drawPath(
+      grid,
+      Paint()
+        ..color = _rgb(52, 153, 255, 0.042)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1,
+    );
+
+    final Paint linePaint = Paint()
+      ..color = _rgb(57, 151, 255, 0.28)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.2;
+    canvas.drawPath(
+      Path()
+        ..moveTo(310, 174)
+        ..lineTo(760, 174)
+        ..moveTo(1160, 174)
+        ..lineTo(1610, 174)
+        ..moveTo(350, 900)
+        ..lineTo(1570, 900),
+      linePaint,
+    );
+
+    canvas.drawRect(
+      full,
+      Paint()
+        ..shader = RadialGradient(
+          colors: <Color>[
+            Colors.transparent,
+            Colors.black.withOpacity(0.50),
+          ],
+          stops: const <double>[0.58, 1],
+        ).createShader(
+          Rect.fromCircle(center: const Offset(960, 540), radius: 1080),
+        ),
+    );
+  }
+
+  void _fillRadial(Canvas canvas, Offset center, double radius, Color color) {
+    final Rect bounds = Rect.fromCircle(center: center, radius: radius);
+    canvas.drawOval(
+      bounds,
+      Paint()
+        ..shader = RadialGradient(
+          colors: <Color>[color, Colors.transparent],
+        ).createShader(bounds),
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _HomeBackgroundPainter oldDelegate) => false;
 }
 
 class ShowroomDashboardPage extends StatefulWidget {

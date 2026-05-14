@@ -1,8 +1,42 @@
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:showroom_flutter/app_environment.dart';
 import 'package:showroom_flutter/main.dart';
 
 void main() {
+  testWidgets('app starts on showroom home page', (WidgetTester tester) async {
+    await tester.pumpWidget(
+      SmartMattressShowroomApp(config: AppEnvironmentConfig.fromName('dev')),
+    );
+
+    expect(find.text('智能睡眠展厅'), findsOneWidget);
+    expect(find.text('智能床垫大屏入口'), findsOneWidget);
+    expect(find.text('轻智能床垫大屏入口'), findsOneWidget);
+  });
+
+  testWidgets('home page shows mattress showroom entry options',
+      (WidgetTester tester) async {
+    bool enteredSmartMattress = false;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ShowroomHomePage(
+          onEnterSmartMattress: () {
+            enteredSmartMattress = true;
+          },
+        ),
+      ),
+    );
+
+    expect(find.text('智能床垫大屏入口'), findsOneWidget);
+    expect(find.text('轻智能床垫大屏入口'), findsOneWidget);
+
+    await tester.tap(find.text('智能床垫大屏入口'));
+    await tester.pump();
+
+    expect(enteredSmartMattress, isTrue);
+  });
+
   test('environment config maps supported mobile flavors', () {
     expect(
       AppEnvironmentConfig.fromName('dev').environment,
