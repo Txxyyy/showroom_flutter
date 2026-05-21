@@ -14,15 +14,29 @@ void main() {
     expect(find.text('轻智能床垫大屏入口'), findsOneWidget);
   });
 
+  testWidgets('light smart mattress entry is available from home',
+      (WidgetTester tester) async {
+    await tester.pumpWidget(
+      SmartMattressShowroomApp(config: AppEnvironmentConfig.fromName('dev')),
+    );
+
+    expect(find.text('待接入'), findsNothing);
+    expect(find.text('在线'), findsNWidgets(2));
+  });
+
   testWidgets('home page shows mattress showroom entry options',
       (WidgetTester tester) async {
     bool enteredSmartMattress = false;
+    bool enteredLightSmartMattress = false;
 
     await tester.pumpWidget(
       MaterialApp(
         home: ShowroomHomePage(
           onEnterSmartMattress: () {
             enteredSmartMattress = true;
+          },
+          onEnterLightSmartMattress: () {
+            enteredLightSmartMattress = true;
           },
         ),
       ),
@@ -35,6 +49,37 @@ void main() {
     await tester.pump();
 
     expect(enteredSmartMattress, isTrue);
+
+    await tester.tap(find.text('轻智能床垫大屏入口'));
+    await tester.pump();
+
+    expect(enteredLightSmartMattress, isTrue);
+  });
+
+  testWidgets('home page fits compact phone landscape',
+      (WidgetTester tester) async {
+    for (final Size size in <Size>[
+      const Size(812, 375),
+      const Size(852, 393),
+    ]) {
+      tester.view.physicalSize = size;
+      tester.view.devicePixelRatio = 1;
+      addTearDown(() {
+        tester.view.resetPhysicalSize();
+        tester.view.resetDevicePixelRatio();
+      });
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ShowroomHomePage(
+            onEnterSmartMattress: () {},
+            onEnterLightSmartMattress: () {},
+          ),
+        ),
+      );
+
+      expect(tester.takeException(), isNull);
+    }
   });
 
   test('environment config maps supported mobile flavors', () {
@@ -58,6 +103,25 @@ void main() {
     expect(AdjustmentMode.left.buttonTitle, '左侧独立调节');
     expect(AdjustmentMode.right.buttonTitle, '右侧独立调节');
     expect(AdjustmentMode.deep.warningKey, 'hip');
+  });
+
+  test('light dashboard title matches smart mattress header copy', () {
+    expect(
+      ShowroomDashboardProfile.light.headerTitle,
+      '智能床垫实时监测',
+    );
+  });
+
+  test('mock dashboard payload stream supports repeated listeners', () async {
+    final Stream<Map<String, Object?>> stream = buildMockDashboardPayloadStream(
+      interval: const Duration(milliseconds: 1),
+    );
+
+    final Map<String, Object?> first = await stream.first;
+    final Map<String, Object?> second = await stream.first;
+
+    expect(first['realtime'], isA<Map<String, Object?>>());
+    expect(second['realtime'], isA<Map<String, Object?>>());
   });
 
   test('heating toggles preserve independent zones', () {
@@ -102,6 +166,8 @@ void main() {
     );
 
     final Map<String, Object?> payload = data.toWebViewPayload();
+    final Map<String, Object?> sensorFlow =
+        payload['sensorFlow']! as Map<String, Object?>;
     final Map<String, Object?> modes =
         payload['modes']! as Map<String, Object?>;
     final Map<String, Object?> left = modes['left']! as Map<String, Object?>;
@@ -111,9 +177,63 @@ void main() {
     final Map<String, Object?> waist =
         targets['waist']! as Map<String, Object?>;
 
+    expect(sensorFlow['enabled'], isFalse);
+    expect(sensorFlow['leftEnabled'], isFalse);
+    expect(sensorFlow['rightEnabled'], isFalse);
+    expect(payload.containsKey('rippleEffect'), isFalse);
     expect(values['waist'], 33);
     expect(waist['pressure'], 0.33);
     expect(waist['glow'], 0.43);
+  });
+
+  test('sensor flow state toggles sides independently', () {
+    final MattressSensorFlowState leftActive = MattressSensorFlowState.defaults
+        .toggleSide(MattressSensorFlowSide.left);
+    final MattressSensorFlowState bothActive =
+        leftActive.toggleSide(MattressSensorFlowSide.right);
+    final MattressSensorFlowState rightActive =
+        bothActive.toggleSide(MattressSensorFlowSide.left);
+
+    expect(MattressSensorFlowState.defaults.enabled, isFalse);
+    expect(leftActive.enabled, isTrue);
+    expect(leftActive.leftEnabled, isTrue);
+    expect(leftActive.rightEnabled, isFalse);
+    expect(bothActive.activeSideCount, 2);
+    expect(rightActive.enabled, isTrue);
+    expect(rightActive.leftEnabled, isFalse);
+    expect(rightActive.rightEnabled, isTrue);
+  });
+
+  test('ripple effect state toggles sides independently', () {
+    final MattressRippleEffectState leftActive =
+        MattressRippleEffectState.off.toggleSide(MattressRippleSide.left);
+    final MattressRippleEffectState bothActive =
+        leftActive.toggleSide(MattressRippleSide.right);
+    final MattressRippleEffectState rightOnly =
+        bothActive.toggleSide(MattressRippleSide.left);
+    final MattressRippleEffectState off =
+        rightOnly.toggleSide(MattressRippleSide.right);
+
+    expect(MattressRippleEffectState.off.enabled, isFalse);
+    expect(leftActive.enabled, isTrue);
+    expect(leftActive.leftEnabled, isTrue);
+    expect(leftActive.rightEnabled, isFalse);
+    expect(leftActive.activeSide, MattressRippleSide.left);
+    expect(leftActive.summaryLabel, 'LEFT');
+    expect(bothActive.enabled, isTrue);
+    expect(bothActive.leftEnabled, isTrue);
+    expect(bothActive.rightEnabled, isTrue);
+    expect(bothActive.activeSideCount, 2);
+    expect(bothActive.activeSide, isNull);
+    expect(bothActive.summaryLabel, 'BOTH');
+    expect(bothActive.toJson()['side'], isNull);
+    expect(rightOnly.enabled, isTrue);
+    expect(rightOnly.leftEnabled, isFalse);
+    expect(rightOnly.rightEnabled, isTrue);
+    expect(rightOnly.toJson()['side'], 'right');
+    expect(off.enabled, isFalse);
+    expect(off.leftEnabled, isFalse);
+    expect(off.rightEnabled, isFalse);
   });
 
   test('dashboard controller publishes runtime data updates', () {
@@ -158,6 +278,19 @@ void main() {
         'heartRate': 91,
         'breathRate': 20,
       },
+      'sensorFlow': <String, Object?>{
+        'enabled': true,
+        'leftEnabled': false,
+        'rightEnabled': true,
+        'intensity': 1.2,
+        'dataRate': 0.42,
+      },
+      'rippleEffect': <String, Object?>{
+        'enabled': true,
+        'leftEnabled': true,
+        'rightEnabled': false,
+        'intensity': -0.2,
+      },
       'trend': <String, Object?>{
         'lumbarSupportIndex': 93,
         'lumbarSupportStatus': '稳定',
@@ -187,6 +320,14 @@ void main() {
     });
 
     expect(controller.data.realtime.heartRate, 91);
+    expect(controller.data.sensorFlow.leftEnabled, isFalse);
+    expect(controller.data.sensorFlow.rightEnabled, isTrue);
+    expect(controller.data.sensorFlow.intensity, 1);
+    expect(controller.data.sensorFlow.dataRate, 0.42);
+    expect(controller.data.rippleEffect.enabled, isTrue);
+    expect(controller.data.rippleEffect.leftEnabled, isTrue);
+    expect(controller.data.rippleEffect.rightEnabled, isFalse);
+    expect(controller.data.rippleEffect.intensity, 0);
     expect(controller.data.trend.lumbarSupportStatus, '稳定');
     expect(controller.data.pressureChart.currentValues[2], 8020);
     expect(controller.data.pressureChart.markerValue, 8020);

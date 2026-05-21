@@ -24584,7 +24584,7 @@ void main() {
       mode: "flat",
       performance: "default",
       maxDpr: null,
-      renderMode: "continuous",
+      renderMode: "onDemand",
       ...window.__SMART_MATTRESS_CONFIG__ || {}
     };
     if (params.has("embedded")) config.embedded = params.get("embedded") !== "0";
@@ -24603,12 +24603,13 @@ void main() {
   var performanceProfile = initialAppConfig.performance === "balanced" ? "balanced" : "default";
   var renderMode = initialAppConfig.renderMode === "onDemand" ? "onDemand" : "continuous";
   var maxDpr = Number.isFinite(initialAppConfig.maxDpr) ? Math.max(1, initialAppConfig.maxDpr) : performanceProfile === "balanced" ? 1.25 : 2;
+  var powerPreference = performanceProfile === "balanced" ? "low-power" : "default";
   var canvas = document.querySelector("#scene");
   var renderer = new WebGLRenderer({
     canvas,
     antialias: true,
     alpha: isIOSNativeEmbed,
-    powerPreference: "high-performance"
+    powerPreference
   });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, maxDpr));
   renderer.setSize(window.innerWidth, window.innerHeight);
@@ -24641,6 +24642,8 @@ void main() {
   var labels = [];
   var coverSlices = [];
   var heatZones = [];
+  var sensorFlowSurfaces = [];
+  var rippleSurfaces = [];
   var sideWalls = [];
   var topSurfaces = [];
   var glbModelRoot;
@@ -24691,6 +24694,8 @@ void main() {
   var animationFrameId = 0;
   var continuousUntil = 0;
   var lastInteractionFrameTime = 0;
+  var overlayFrameInterval = performanceProfile === "balanced" ? 1e3 / 30 : 1e3 / 40;
+  var lastOverlayRenderAt = 0;
   var hoveredDirty = true;
   var cameraDesired = new Vector3();
   var targetDesired = new Vector3();
@@ -24734,6 +24739,20 @@ void main() {
     left: { waist: false, leg: false },
     right: { waist: false, leg: false }
   };
+  var sensorFlowState = {
+    enabled: false,
+    leftEnabled: false,
+    rightEnabled: false,
+    intensity: 0.78,
+    dataRate: 0.68
+  };
+  var rippleState = {
+    intensity: 0.86,
+    sides: {
+      left: { enabled: false, startedAt: 0 },
+      right: { enabled: false, startedAt: 0 }
+    }
+  };
   function postAppEvent(type, detail = {}) {
     const payload = { type, detail, state: getPublicState() };
     window.dispatchEvent(new CustomEvent("SmartMattress3D:event", { detail: payload }));
@@ -24750,13 +24769,57 @@ void main() {
   function hasHeatingActive() {
     return Object.values(heatState.left).some(Boolean) || Object.values(heatState.right).some(Boolean);
   }
+  function hasSensorFlowActive() {
+    const targetActive = sensorFlowState.enabled && (sensorFlowState.leftEnabled || sensorFlowState.rightEnabled);
+    return targetActive || sensorFlowSurfaces.some((sensor) => sensor.userData.strength > 6e-3);
+  }
+  function getRippleSideState(side) {
+    return isValidSide(side) ? rippleState.sides[side] : null;
+  }
+  function getRippleSurface(side) {
+    return rippleSurfaces.find((surface) => surface.userData.side === side) || null;
+  }
+  function getEnabledRippleSide() {
+    if (rippleState.sides.left.enabled) return "left";
+    if (rippleState.sides.right.enabled) return "right";
+    return null;
+  }
+  function resetRippleSurface(side) {
+    const rippleSurface = getRippleSurface(side);
+    if (!rippleSurface) return;
+    rippleSurface.userData.strength = 0;
+    rippleSurface.visible = false;
+    rippleSurface.material.uniforms.uStrength.value = 0;
+    rippleSurface.material.uniforms.uBurstTime.value = 0;
+  }
+  function hasRippleSideActive(side) {
+    const sideState = getRippleSideState(side);
+    if (!sideState) return false;
+    const surface = getRippleSurface(side);
+    return sideState.enabled || (surface?.userData?.strength ?? 0) > 6e-3;
+  }
+  function hasRippleActive() {
+    return ["left", "right"].some((side) => hasRippleSideActive(side));
+  }
+  function shouldThrottleOverlayRender(nowMs) {
+    if (renderMode !== "onDemand") return false;
+    if (adjustmentSequenceActive || manualCamera.active || hasActiveSideAdjustment()) return false;
+    if (sideScanControl.left.active || sideScanControl.right.active) return false;
+    if (hasActiveManualBladder()) return false;
+    if (Math.abs(reveal - targetReveal) > 6e-3) return false;
+    if (coverSlices.some((slice) => Math.abs((slice.userData.reveal ?? 0) - (sideRevealTarget[slice.userData.side] || 0)) > 0.02)) return false;
+    if (topSurfaces.some((top) => Math.abs((top.userData.reveal ?? 0) - (sideRevealTarget[top.userData.side] || 0)) > 0.02)) return false;
+    if (hoveredDirty || nowMs - lastInteractionFrameTime < settleTiming.hover) return false;
+    if (!hasHeatingActive() && !hasSensorFlowActive() && !hasRippleActive()) return false;
+    return nowMs - lastOverlayRenderAt < overlayFrameInterval;
+  }
   function shouldContinueRendering(nowMs) {
     if (renderMode !== "onDemand") return true;
     if (nowMs < continuousUntil) return true;
     if (!isSceneReady || renderedFrameCount < 3) return true;
     if (adjustmentSequenceActive || manualCamera.active || hasActiveSideAdjustment()) return true;
     if (sideScanControl.left.active || sideScanControl.right.active) return true;
-    if (hasActiveManualBladder() || hasHeatingActive()) return true;
+    if (hasActiveManualBladder() || hasHeatingActive() || hasSensorFlowActive() || hasRippleActive(nowMs)) return true;
     if (Math.abs(reveal - targetReveal) > 6e-3) return true;
     if (coverSlices.some((slice) => Math.abs((slice.userData.reveal ?? 0) - (sideRevealTarget[slice.userData.side] || 0)) > 0.02)) return true;
     if (topSurfaces.some((top) => Math.abs((top.userData.reveal ?? 0) - (sideRevealTarget[top.userData.side] || 0)) > 0.02)) return true;
@@ -24783,6 +24846,15 @@ void main() {
         right: Number(sideRevealTarget.right.toFixed(3))
       },
       heating: JSON.parse(JSON.stringify(heatState)),
+      sensorFlow: JSON.parse(JSON.stringify(sensorFlowState)),
+      rippleEffect: {
+        active: hasRippleActive(),
+        enabled: rippleState.sides.left.enabled || rippleState.sides.right.enabled,
+        side: getEnabledRippleSide(),
+        leftEnabled: rippleState.sides.left.enabled,
+        rightEnabled: rippleState.sides.right.enabled,
+        intensity: Number(rippleState.intensity.toFixed(3))
+      },
       embedded: document.body.dataset.embedded === "true"
     };
   }
@@ -24971,6 +25043,750 @@ void main() {
           flow
         );
         vec3 color = mix(uHeatColor, uHotColor, clamp(regularHalo * 0.52 + particles * 0.34 + inward * 0.14 + centerMist * 0.2 + breath * 0.2, 0.0, 1.0));
+        gl_FragColor = vec4(color, alpha);
+      }
+    `
+    });
+  }
+  function createRippleMaterial(side) {
+    return new ShaderMaterial({
+      transparent: true,
+      blending: AdditiveBlending,
+      depthWrite: false,
+      depthTest: true,
+      side: DoubleSide,
+      uniforms: {
+        uTime: { value: 0 },
+        uStrength: { value: 0 },
+        uBurstTime: { value: 0 },
+        uSideSign: { value: side === "left" ? -1 : 1 },
+        uBaseColor: { value: new Color(3203327) },
+        uHotColor: { value: new Color(12255231) }
+      },
+      vertexShader: `
+      varying vec2 vUv;
+      void main() {
+        vUv = uv;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+      fragmentShader: `
+      precision highp float;
+      varying vec2 vUv;
+      uniform float uTime;
+      uniform float uStrength;
+      uniform float uBurstTime;
+      uniform float uSideSign;
+      uniform vec3 uBaseColor;
+      uniform vec3 uHotColor;
+
+      float sdRoundBox(vec2 p, vec2 b, float r) {
+        vec2 q = abs(p) - b + r;
+        return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;
+      }
+
+      float hash(vec2 p) {
+        return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+      }
+
+      float bedMask(vec2 uv) {
+        vec2 p = uv - 0.5;
+        return 1.0 - smoothstep(0.0, 0.035, sdRoundBox(p, vec2(0.468, 0.432), 0.045));
+      }
+
+      float sideMask(vec2 uv) {
+        if (uSideSign < 0.0) return 1.0 - smoothstep(0.492, 0.512, uv.x);
+        return smoothstep(0.488, 0.508, uv.x);
+      }
+
+      vec2 toSideUv(vec2 uv) {
+        float localX = uSideSign < 0.0 ? uv.x * 2.0 : (uv.x - 0.5) * 2.0;
+        return clamp(vec2(localX, uv.y), 0.0, 1.0);
+      }
+
+      float rippleCycleProgress(float loopTime) {
+        float cycle = 6.2;
+        float cycleTime = mod(max(loopTime, 0.0), cycle);
+        return cycleTime / cycle;
+      }
+
+      vec2 rippleOffset(vec2 uv, vec2 center, float loopTime) {
+        vec2 delta = uv - center;
+        vec2 scaled = delta * vec2(1.0, 1.14);
+        float dist = length(scaled);
+        vec2 dir = scaled / max(dist, 0.0001);
+        float progress = rippleCycleProgress(loopTime);
+        float radius = mix(0.035, 0.94, progress);
+        float width = mix(0.052, 0.078, progress);
+        float band = exp(-pow((dist - radius) / width, 2.0));
+        float push = clamp((radius - dist) / width, -1.0, 1.0);
+        float edgeFade = 1.0 - smoothstep(0.9, 1.04, dist);
+        return dir * band * push * 0.022 * edgeFade;
+      }
+
+      float rippleBand(vec2 uv, vec2 center, float loopTime) {
+        vec2 delta = (uv - center) * vec2(1.0, 1.14);
+        float dist = length(delta);
+        float progress = rippleCycleProgress(loopTime);
+        float radius = mix(0.035, 0.94, progress);
+        float width = mix(0.045, 0.072, progress);
+        float core = exp(-pow((dist - radius) / width, 2.0));
+        float tail = exp(-pow((dist - radius) / (width * 1.38), 2.0));
+        float edgeFade = 1.0 - smoothstep(0.92, 1.06, dist);
+        return clamp((core * 0.96 + tail * 0.08) * edgeFade, 0.0, 1.0);
+      }
+
+      float dotField(vec2 uv) {
+        vec2 grid = uv * vec2(24.0, 40.0);
+        vec2 id = floor(grid);
+        vec2 f = fract(grid) - 0.5;
+        vec2 jitter = vec2(
+          hash(id + vec2(13.7, 31.1)),
+          hash(id + vec2(41.3, 7.9))
+        ) - 0.5;
+        float radius = mix(0.118, 0.166, hash(id + vec2(3.1, 9.7)));
+        float d = length(f - jitter * 0.16);
+        float core = 1.0 - smoothstep(radius, radius + 0.105, d);
+        float halo = 1.0 - smoothstep(radius + 0.045, radius + 0.23, d);
+        return clamp(core + halo * 0.14, 0.0, 1.0);
+      }
+
+      float piezoHighlight(vec2 uv) {
+        vec2 chipCenter = vec2(0.5, 0.73);
+        vec2 chipP = uv - chipCenter;
+        float chipSd = sdRoundBox(chipP, vec2(0.225, 0.052), 0.01);
+        float body = 1.0 - smoothstep(0.0, 0.018, chipSd);
+        float border = exp(-abs(chipSd) * 42.0);
+        float coreGlow = exp(-length(chipP * vec2(2.0, 8.2)) * 4.8);
+        float innerDots = dotField(clamp(chipCenter + chipP * vec2(1.18, 1.36), 0.0, 1.0));
+        float columnGlow = exp(-abs(chipP.x) * 18.0) * body;
+        float padRows =
+          (1.0 - smoothstep(0.01, 0.045, abs(chipP.y - 0.072))) * (1.0 - smoothstep(0.13, 0.22, abs(chipP.x))) +
+          (1.0 - smoothstep(0.01, 0.045, abs(chipP.y + 0.072))) * (1.0 - smoothstep(0.13, 0.22, abs(chipP.x)));
+        return clamp(
+          body * (0.26 + innerDots * 0.16) +
+          border * 0.58 +
+          coreGlow * 0.92 +
+          columnGlow * 0.18 +
+          padRows * 0.14,
+          0.0,
+          1.0
+        );
+      }
+
+      void main() {
+        float mask = bedMask(vUv) * sideMask(vUv);
+        if (mask <= 0.001) discard;
+        vec2 sideUv = toSideUv(vUv);
+        float loopTime = max(uBurstTime, 0.0);
+        vec2 center = vec2(0.5, 0.52);
+        vec2 displacement = rippleOffset(sideUv, center, loopTime);
+        vec2 warpedUv = clamp(sideUv + displacement * uStrength, 0.0, 1.0);
+        float baseDots = dotField(sideUv);
+        float movingDots = dotField(warpedUv);
+        float bands = rippleBand(sideUv, center, loopTime);
+        float nearbyBands = pow(clamp(bands, 0.0, 1.0), 0.82);
+        float waveLift = smoothstep(0.06, 0.92, bands);
+        float piezo = piezoHighlight(sideUv);
+        float seamGlow = exp(-abs(vUv.x - 0.5) * 44.0) * 0.034;
+        float alpha = uStrength * mask * (
+          baseDots * 0.15 +
+          movingDots * (0.075 + nearbyBands * 1.03) +
+          bands * (0.1 + waveLift * 0.18) +
+          piezo * 0.62 +
+          seamGlow
+        );
+        float hotMix = clamp(baseDots * 0.025 + nearbyBands * 0.56 + movingDots * waveLift * 0.34 + piezo * 0.5, 0.0, 1.0);
+        vec3 color = mix(uBaseColor, uHotColor, hotMix);
+        gl_FragColor = vec4(color, alpha);
+      }
+    `
+    });
+  }
+  var sensorFlowShaderCache = null;
+  function clampSensorRouteValue(value, min, max) {
+    return Math.min(max, Math.max(min, value));
+  }
+  function formatSensorRouteNumber(value) {
+    const normalized = Math.abs(value) < 5e-4 ? 0 : value;
+    return normalized.toFixed(3);
+  }
+  function formatSensorRouteVec2(point) {
+    return `vec2(${formatSensorRouteNumber(point.x)}, ${formatSensorRouteNumber(point.y)})`;
+  }
+  function lerpSensorRouteValue(start, end, amount) {
+    return start + (end - start) * amount;
+  }
+  function sensorRouteNoise(seed, offset) {
+    const value = Math.sin((seed + offset) * 127.1 + 311.7) * 43758.5453123;
+    return value - Math.floor(value);
+  }
+  function pushSensorRoutePoint(points, point) {
+    const previous = points[points.length - 1];
+    if (Math.hypot(previous.x - point.x, previous.y - point.y) < 6e-3) return;
+    if (points.length >= 2) {
+      const beforePrevious = points[points.length - 2];
+      const ax = previous.x - beforePrevious.x;
+      const ay = previous.y - beforePrevious.y;
+      const bx = point.x - previous.x;
+      const by = point.y - previous.y;
+      const cross = Math.abs(ax * by - ay * bx);
+      const dot = ax * bx + ay * by;
+      if (cross < 2.5e-4 && dot > 0) {
+        points[points.length - 1] = point;
+        return;
+      }
+    }
+    points.push(point);
+  }
+  function createSensorRoutePoint(start, end, primaryAxis, secondaryAxis, primaryProgress, secondaryValue) {
+    const point = { x: start.x, y: start.y };
+    point[primaryAxis] = lerpSensorRouteValue(start[primaryAxis], end[primaryAxis], primaryProgress);
+    point[secondaryAxis] = secondaryValue;
+    return point;
+  }
+  function buildSensorRoutePoints(start, end, options) {
+    const primaryAxis = options.primaryAxis;
+    const secondaryAxis = primaryAxis === "x" ? "y" : "x";
+    const primaryTotal = end[primaryAxis] - start[primaryAxis];
+    const secondaryTotal = end[secondaryAxis] - start[secondaryAxis];
+    const primaryAbs = Math.abs(primaryTotal);
+    const secondaryAbs = Math.abs(secondaryTotal);
+    const points = [{ x: start.x, y: start.y }];
+    const routeT = options.routeCount > 1 ? options.routeIndex / (options.routeCount - 1) : 0.5;
+    const edgeBias = Math.abs(routeT - 0.5) * 2;
+    const familyConfig = {
+      top: {
+        straightThreshold: 0.026,
+        singleDiagonalSecondary: 0.225,
+        primaryLow: 0.1,
+        primaryHigh: 0.2,
+        secondaryLow: 0.04,
+        secondaryHigh: 0.3,
+        firstStraightMin: 0.2,
+        firstStraightMax: 0.28,
+        firstStraightEdgePull: 0.018,
+        middleStraightMin: 0.68,
+        middleStraightMax: 0.8,
+        middleStraightEdgePull: 0.026,
+        lanePull: 0.5,
+        lanePullDrift: 0.016,
+        diagRatioMin: 0.028,
+        diagRatioMax: 0.038,
+        singleStraightMin: 0.58,
+        singleStraightMax: 0.68,
+        singleStraightEdgePull: 0.03,
+        seedLaneJitter: 0.005,
+        seedStraightJitter: 0.006
+      },
+      side: {
+        straightThreshold: 0.024,
+        singleDiagonalSecondary: 0.072,
+        primaryLow: 0.14,
+        primaryHigh: 0.26,
+        secondaryLow: 0.035,
+        secondaryHigh: 0.18,
+        firstStraightMin: 0.18,
+        firstStraightMax: 0.24,
+        firstStraightEdgePull: 0.015,
+        middleStraightMin: 0.66,
+        middleStraightMax: 0.76,
+        middleStraightEdgePull: 0.022,
+        lanePull: 0.48,
+        lanePullDrift: 0.014,
+        diagRatioMin: 0.026,
+        diagRatioMax: 0.036,
+        singleStraightMin: 0.6,
+        singleStraightMax: 0.7,
+        singleStraightEdgePull: 0.028,
+        seedLaneJitter: 0.004,
+        seedStraightJitter: 0.005
+      },
+      bottom: {
+        straightThreshold: 0.024,
+        singleDiagonalSecondary: 0.058,
+        primaryLow: 0.32,
+        primaryHigh: 0.7,
+        secondaryLow: 0.04,
+        secondaryHigh: 0.28,
+        firstStraightMin: 0.18,
+        firstStraightMax: 0.28,
+        firstStraightEdgePull: 0.015,
+        middleStraightMin: 0.64,
+        middleStraightMax: 0.78,
+        middleStraightEdgePull: 0.016,
+        lanePull: 0.32,
+        lanePullDrift: 0.01,
+        diagRatioMin: 0.024,
+        diagRatioMax: 0.034,
+        singleStraightMin: 0.68,
+        singleStraightMax: 0.8,
+        singleStraightEdgePull: 0.018,
+        seedLaneJitter: 0.022,
+        seedStraightJitter: 0.015,
+        tailSecondaryThreshold: 0.105,
+        tailStraightMin: 0.09,
+        tailStraightMax: 0.148,
+        tailStraightEdgePull: 0.01,
+        tailStraightJitter: 0.012,
+        tailLanePull: 0.39,
+        tailLaneJitter: 0.092,
+        tailDiagRatioMin: 0.015,
+        tailDiagRatioMax: 0.022
+      }
+    }[options.family];
+    const routeSeed = Number.isFinite(options.seed) ? options.seed : routeT * 3.7 + edgeBias;
+    const seedPrimary = (sensorRouteNoise(routeSeed, 0.17) - 0.5) * 2;
+    const seedSecondary = (sensorRouteNoise(routeSeed, 0.83) - 0.5) * 2;
+    const seedTail = (sensorRouteNoise(routeSeed, 1.49) - 0.5) * 2;
+    const laneSeedJitter = familyConfig.seedLaneJitter || 0;
+    const straightSeedJitter = familyConfig.seedStraightJitter || 0;
+    const primaryScore = clampSensorRouteValue(
+      (primaryAbs - familyConfig.primaryLow) / (familyConfig.primaryHigh - familyConfig.primaryLow),
+      0,
+      1
+    );
+    const secondaryScore = clampSensorRouteValue(
+      (secondaryAbs - familyConfig.secondaryLow) / (familyConfig.secondaryHigh - familyConfig.secondaryLow),
+      0,
+      1
+    );
+    if (secondaryAbs < familyConfig.straightThreshold) {
+      pushSensorRoutePoint(
+        points,
+        createSensorRoutePoint(start, end, primaryAxis, secondaryAxis, 0.78, start[secondaryAxis])
+      );
+      pushSensorRoutePoint(points, { x: end.x, y: end.y });
+      return points;
+    }
+    const diagonalRatio = lerpSensorRouteValue(
+      familyConfig.diagRatioMin,
+      familyConfig.diagRatioMax,
+      secondaryScore * 0.78 + primaryScore * 0.22
+    );
+    if (secondaryAbs < familyConfig.singleDiagonalSecondary) {
+      const straightStop = clampSensorRouteValue(
+        lerpSensorRouteValue(
+          familyConfig.singleStraightMin,
+          familyConfig.singleStraightMax,
+          primaryScore
+        ) - edgeBias * familyConfig.singleStraightEdgePull + seedPrimary * straightSeedJitter * 0.86,
+        0.54,
+        0.8
+      );
+      pushSensorRoutePoint(
+        points,
+        createSensorRoutePoint(start, end, primaryAxis, secondaryAxis, straightStop, start[secondaryAxis])
+      );
+      pushSensorRoutePoint(points, { x: end.x, y: end.y });
+      return points;
+    }
+    const secondaryStart = start[secondaryAxis];
+    const secondaryEnd = end[secondaryAxis];
+    const secondaryMin = Math.min(secondaryStart, secondaryEnd);
+    const secondaryMax = Math.max(secondaryStart, secondaryEnd);
+    const laneInset = Math.min(0.018, secondaryAbs * 0.24);
+    const laneMix = clampSensorRouteValue(
+      familyConfig.lanePull + (routeT - 0.5) * familyConfig.lanePullDrift + seedSecondary * laneSeedJitter,
+      0.18,
+      0.58
+    );
+    const laneSecondary = clampSensorRouteValue(
+      lerpSensorRouteValue(secondaryStart, secondaryEnd, laneMix),
+      secondaryMin + laneInset,
+      secondaryMax - laneInset
+    );
+    const firstStraightStop = clampSensorRouteValue(
+      lerpSensorRouteValue(
+        familyConfig.firstStraightMin,
+        familyConfig.firstStraightMax,
+        primaryScore
+      ) - edgeBias * familyConfig.firstStraightEdgePull + seedPrimary * straightSeedJitter,
+      0.12,
+      0.34
+    );
+    const firstDiagStop = Math.min(firstStraightStop + diagonalRatio, 0.46);
+    const middleStraightStop = clampSensorRouteValue(
+      lerpSensorRouteValue(
+        familyConfig.middleStraightMin,
+        familyConfig.middleStraightMax,
+        primaryScore
+      ) - edgeBias * familyConfig.middleStraightEdgePull + seedTail * straightSeedJitter * 0.75,
+      firstDiagStop + 0.18,
+      0.86
+    );
+    const useTailBreak = Boolean(familyConfig.tailSecondaryThreshold) && secondaryAbs > familyConfig.tailSecondaryThreshold;
+    if (useTailBreak) {
+      const tailLaneMix = clampSensorRouteValue(
+        familyConfig.tailLanePull + seedTail * (familyConfig.tailLaneJitter || 0),
+        0.24,
+        0.62
+      );
+      const tailLaneSecondary = clampSensorRouteValue(
+        lerpSensorRouteValue(secondaryStart, laneSecondary, tailLaneMix),
+        secondaryMin + laneInset * 0.6,
+        secondaryMax - laneInset * 0.6
+      );
+      const tailStraightStop = clampSensorRouteValue(
+        lerpSensorRouteValue(
+          familyConfig.tailStraightMin,
+          familyConfig.tailStraightMax,
+          primaryScore
+        ) - edgeBias * familyConfig.tailStraightEdgePull + seedPrimary * (familyConfig.tailStraightJitter || 0),
+        0.07,
+        Math.max(firstStraightStop - 0.055, 0.1)
+      );
+      const tailDiagStop = Math.min(
+        tailStraightStop + lerpSensorRouteValue(
+          familyConfig.tailDiagRatioMin,
+          familyConfig.tailDiagRatioMax,
+          secondaryScore
+        ),
+        Math.max(firstStraightStop - 0.028, tailStraightStop + 0.012)
+      );
+      pushSensorRoutePoint(
+        points,
+        createSensorRoutePoint(start, end, primaryAxis, secondaryAxis, tailStraightStop, secondaryStart)
+      );
+      pushSensorRoutePoint(
+        points,
+        createSensorRoutePoint(start, end, primaryAxis, secondaryAxis, tailDiagStop, tailLaneSecondary)
+      );
+      pushSensorRoutePoint(
+        points,
+        createSensorRoutePoint(start, end, primaryAxis, secondaryAxis, firstStraightStop, tailLaneSecondary)
+      );
+    } else {
+      pushSensorRoutePoint(
+        points,
+        createSensorRoutePoint(start, end, primaryAxis, secondaryAxis, firstStraightStop, secondaryStart)
+      );
+    }
+    pushSensorRoutePoint(
+      points,
+      createSensorRoutePoint(start, end, primaryAxis, secondaryAxis, firstDiagStop, laneSecondary)
+    );
+    pushSensorRoutePoint(
+      points,
+      createSensorRoutePoint(start, end, primaryAxis, secondaryAxis, middleStraightStop, laneSecondary)
+    );
+    pushSensorRoutePoint(points, { x: end.x, y: end.y });
+    return points;
+  }
+  function buildSensorFlowShaderCache() {
+    if (sensorFlowShaderCache) return sensorFlowShaderCache;
+    const topPins = [
+      { x: -0.2, y: 0.332 },
+      { x: -0.12, y: 0.328 },
+      { x: -0.04, y: 0.334 },
+      { x: 0.04, y: 0.334 },
+      { x: 0.12, y: 0.328 },
+      { x: 0.2, y: 0.332 }
+    ];
+    const leftPins = [
+      { x: -0.278, y: 0.268 },
+      { x: -0.284, y: 0.247 },
+      { x: -0.281, y: 0.224 },
+      { x: -0.285, y: 0.201 },
+      { x: -0.276, y: 0.18 }
+    ];
+    const rightPins = [
+      { x: 0.275, y: 0.262 },
+      { x: 0.282, y: 0.249 },
+      { x: 0.286, y: 0.227 },
+      { x: 0.281, y: 0.205 },
+      { x: 0.279, y: 0.186 }
+    ];
+    const bottomPins = [
+      { x: -0.218, y: 0.133 },
+      { x: -0.158, y: 0.127 },
+      { x: -0.101, y: 0.136 },
+      { x: -0.037, y: 0.124 },
+      { x: 0.026, y: 0.129 },
+      { x: 0.096, y: 0.135 },
+      { x: 0.164, y: 0.128 },
+      { x: 0.218, y: 0.134 }
+    ];
+    const routeDefinitions = [
+      { family: "top", group: "top", primaryAxis: "y", start: { x: -0.12, y: 0.49 }, end: topPins[1], widthVar: "lineWidth", offset: 0.1, speed: 0.84, seed: 0.46 },
+      { family: "top", group: "top", primaryAxis: "y", start: { x: -0.04, y: 0.49 }, end: topPins[2], widthVar: "fillerLine", offset: 0.18, speed: 0.8, seed: 0.62 },
+      { family: "top", group: "top", primaryAxis: "y", start: { x: 0.04, y: 0.49 }, end: topPins[3], widthVar: "fillerLine", offset: 0.26, speed: 0.8, seed: 0.78 },
+      { family: "top", group: "top", primaryAxis: "y", start: { x: 0.12, y: 0.49 }, end: topPins[4], widthVar: "lineWidth", offset: 0.34, speed: 0.84, seed: 0.94 },
+      { family: "side", group: "sideLeft", primaryAxis: "x", start: { x: -0.5, y: 0.334 }, end: leftPins[1], widthVar: "lineWidth", offset: 0.13, speed: 0.88, seed: 1.41 },
+      { family: "side", group: "sideLeft", primaryAxis: "x", start: { x: -0.5, y: 0.221 }, end: leftPins[2], widthVar: "fineLine", offset: 0.21, speed: 0.84, seed: 1.57 },
+      { family: "side", group: "sideLeft", primaryAxis: "x", start: { x: -0.5, y: 0.112 }, end: leftPins[3], widthVar: "lineWidth", offset: 0.29, speed: 0.82, seed: 1.69 },
+      { family: "side", group: "sideLeft", primaryAxis: "x", start: { x: -0.5, y: -0.022 }, end: leftPins[4], widthVar: "fineLine", offset: 0.37, speed: 0.78, seed: 1.88 },
+      { family: "side", group: "sideRight", primaryAxis: "x", start: { x: 0.5, y: 0.318 }, end: rightPins[1], widthVar: "lineWidth", offset: 0.17, speed: 0.88, seed: 2.13 },
+      { family: "side", group: "sideRight", primaryAxis: "x", start: { x: 0.5, y: 0.239 }, end: rightPins[2], widthVar: "fineLine", offset: 0.25, speed: 0.84, seed: 2.31 },
+      { family: "side", group: "sideRight", primaryAxis: "x", start: { x: 0.5, y: 0.099 }, end: rightPins[3], widthVar: "lineWidth", offset: 0.33, speed: 0.82, seed: 2.44 },
+      { family: "side", group: "sideRight", primaryAxis: "x", start: { x: 0.5, y: -0.006 }, end: rightPins[4], widthVar: "fineLine", offset: 0.41, speed: 0.78, seed: 2.55 },
+      { family: "bottom", group: "bottom", primaryAxis: "y", start: { x: -0.488, y: -0.476 }, end: bottomPins[0], widthVar: "fineLine", offset: 0.48, speed: 0.7, seed: 2.66 },
+      { family: "bottom", group: "bottom", primaryAxis: "y", start: { x: -0.372, y: -0.5 }, end: bottomPins[1], widthVar: "lineWidth", offset: 0.56, speed: 0.67, seed: 2.89 },
+      { family: "bottom", group: "bottom", primaryAxis: "y", start: { x: -0.248, y: -0.488 }, end: bottomPins[2], widthVar: "fillerLine", offset: 0.64, speed: 0.65, seed: 3.03 },
+      { family: "bottom", group: "bottom", primaryAxis: "y", start: { x: -0.104, y: -0.497 }, end: bottomPins[3], widthVar: "fineLine", offset: 0.72, speed: 0.63, seed: 3.17 },
+      { family: "bottom", group: "bottom", primaryAxis: "y", start: { x: 0.071, y: -0.5 }, end: bottomPins[4], widthVar: "fineLine", offset: 0.8, speed: 0.63, seed: 3.36 },
+      { family: "bottom", group: "bottom", primaryAxis: "y", start: { x: 0.223, y: -0.486 }, end: bottomPins[5], widthVar: "fillerLine", offset: 0.88, speed: 0.65, seed: 3.49 },
+      { family: "bottom", group: "bottom", primaryAxis: "y", start: { x: 0.347, y: -0.5 }, end: bottomPins[6], widthVar: "lineWidth", offset: 0.96, speed: 0.67, seed: 3.63 },
+      { family: "bottom", group: "bottom", primaryAxis: "y", start: { x: 0.482, y: -0.474 }, end: bottomPins[7], widthVar: "fineLine", offset: 0.04, speed: 0.7, seed: 3.86 }
+    ];
+    const groupCounts = {};
+    routeDefinitions.forEach((route) => {
+      groupCounts[route.group] = (groupCounts[route.group] || 0) + 1;
+    });
+    const groupIndices = {};
+    const routes = routeDefinitions.map((route) => {
+      const routeIndex = groupIndices[route.group] || 0;
+      groupIndices[route.group] = routeIndex + 1;
+      return {
+        ...route,
+        routeIndex,
+        routeCount: groupCounts[route.group],
+        points: buildSensorRoutePoints(route.start, route.end, {
+          ...route,
+          routeIndex,
+          routeCount: groupCounts[route.group]
+        })
+      };
+    });
+    const routeShader = routes.map((route) => {
+      const offsetStep = route.family === "bottom" ? 0.043 : route.family === "side" ? 0.051 : 0.055;
+      return route.points.slice(0, -1).map((point, index) => {
+        const offset = (route.offset + index * offsetStep) % 1;
+        return `        circuit += circuitSegment(centered, ${formatSensorRouteVec2(point)}, ${formatSensorRouteVec2(route.points[index + 1])}, ${route.widthVar}, ${formatSensorRouteNumber(offset)}, speed * ${formatSensorRouteNumber(route.speed)});`;
+      }).join("\n");
+    }).join("\n");
+    const nodeKeys = /* @__PURE__ */ new Set();
+    const nodeLines = [];
+    const addNodeLine = (point, radius) => {
+      const key = `${formatSensorRouteNumber(point.x)}:${formatSensorRouteNumber(point.y)}:${radius.toFixed(4)}`;
+      if (nodeKeys.has(key)) return;
+      nodeKeys.add(key);
+      nodeLines.push(`          circuitNode(centered, ${formatSensorRouteVec2(point)}, ${radius.toFixed(4)})`);
+    };
+    routes.forEach((route) => {
+      addNodeLine(route.points[0], route.family === "bottom" ? 0.0042 : 0.0041);
+      for (let index = 3; index < route.points.length - 1; index += 3) {
+        addNodeLine(route.points[index], route.family === "bottom" ? 0.0038 : 0.0036);
+      }
+    });
+    sensorFlowShaderCache = {
+      routeShader,
+      nodeShader: nodeLines.length ? nodeLines.join(" +\n") : "0.0"
+    };
+    return sensorFlowShaderCache;
+  }
+  function createSensorFlowMaterial() {
+    const sensorFlowShader = buildSensorFlowShaderCache();
+    return new ShaderMaterial({
+      transparent: true,
+      blending: AdditiveBlending,
+      depthWrite: false,
+      depthTest: true,
+      side: DoubleSide,
+      uniforms: {
+        uTime: { value: 0 },
+        uStrength: { value: 0 },
+        uDataRate: { value: 0.64 },
+        uSideSign: { value: 1 },
+        uBaseColor: { value: new Color(23807) },
+        uHotColor: { value: new Color(11464447) }
+      },
+      vertexShader: `
+      varying vec2 vUv;
+      void main() {
+        vUv = uv;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+      fragmentShader: `
+      precision highp float;
+      varying vec2 vUv;
+      uniform float uTime;
+      uniform float uStrength;
+      uniform float uDataRate;
+      uniform float uSideSign;
+      uniform vec3 uBaseColor;
+      uniform vec3 uHotColor;
+
+      float sdRoundBox(vec2 p, vec2 b, float r) {
+        vec2 q = abs(p) - b + r;
+        return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;
+      }
+
+      vec2 circuitSegment(vec2 p, vec2 a, vec2 b, float width, float offset, float speed) {
+        vec2 pa = p - a;
+        vec2 ba = b - a;
+        float denom = max(dot(ba, ba), 0.0001);
+        float h = clamp(dot(pa, ba) / denom, 0.0, 1.0);
+        float d = length(pa - ba * h);
+        float line = 1.0 - smoothstep(width, width + 0.0032, d);
+        float differential = mix(0.72, 1.06, fract(sin(offset * 38.113 + uSideSign * 5.71) * 43758.5453));
+        float head = fract((1.0 - h) - uTime * speed * differential + offset);
+        float pulse = smoothstep(0.0, 0.06, head) * (1.0 - smoothstep(0.06, 0.18, head));
+        float trail = smoothstep(0.0, 0.36, head) * (1.0 - smoothstep(0.36, 0.58, head));
+        return vec2(line, line * (pulse + trail * 0.18));
+      }
+
+      float circuitNode(vec2 p, vec2 c, float radius) {
+        float d = length(p - c);
+        return 1.0 - smoothstep(radius, radius + 0.009, d);
+      }
+
+      void main() {
+        vec2 centered = vUv - 0.5;
+        vec2 chipCenter = vec2(0.0, 0.23);
+        vec2 chipHalf = vec2(0.225, 0.052);
+        vec2 chipP = centered - chipCenter;
+        float chipSd = sdRoundBox(chipP, chipHalf, 0.01);
+        float body = 1.0 - smoothstep(0.0, 0.014, chipSd);
+        float border = 1.0 - smoothstep(0.001, 0.012, abs(chipSd));
+        float borderGlow = exp(-abs(chipSd) * 74.0);
+        float areaGlow = exp(-max(chipSd, 0.0) * 10.0) * (1.0 - smoothstep(0.0, 0.28, max(chipSd, 0.0)));
+        float coreGlow = exp(-length(chipP * vec2(2.0, 8.8)) * 5.2);
+        float plateFill = body * (0.62 + 0.38 * smoothstep(-0.02, 0.025, chipP.y));
+        vec2 leftEdgeA = chipCenter + vec2(-chipHalf.x, chipHalf.y * 0.7);
+        vec2 leftEdgeB = chipCenter + vec2(-chipHalf.x, chipHalf.y * 0.35);
+        vec2 leftEdgeC = chipCenter + vec2(-chipHalf.x, -chipHalf.y * 0.05);
+        vec2 leftEdgeD = chipCenter + vec2(-chipHalf.x, -chipHalf.y * 0.52);
+        vec2 leftEdgeE = chipCenter + vec2(-chipHalf.x, -chipHalf.y * 0.9);
+        vec2 rightEdgeA = chipCenter + vec2(chipHalf.x, chipHalf.y * 0.7);
+        vec2 rightEdgeB = chipCenter + vec2(chipHalf.x, chipHalf.y * 0.35);
+        vec2 rightEdgeC = chipCenter + vec2(chipHalf.x, -chipHalf.y * 0.05);
+        vec2 rightEdgeD = chipCenter + vec2(chipHalf.x, -chipHalf.y * 0.52);
+        vec2 rightEdgeE = chipCenter + vec2(chipHalf.x, -chipHalf.y * 0.9);
+        vec2 topEdgeA = chipCenter + vec2(-0.2, chipHalf.y);
+        vec2 topEdgeB = chipCenter + vec2(-0.12, chipHalf.y);
+        vec2 topEdgeC = chipCenter + vec2(-0.04, chipHalf.y);
+        vec2 topEdgeD = chipCenter + vec2(0.04, chipHalf.y);
+        vec2 topEdgeE = chipCenter + vec2(0.12, chipHalf.y);
+        vec2 topEdgeF = chipCenter + vec2(0.2, chipHalf.y);
+        vec2 bottomEdgeA = chipCenter + vec2(-0.21, -chipHalf.y);
+        vec2 bottomEdgeB = chipCenter + vec2(-0.15, -chipHalf.y);
+        vec2 bottomEdgeC = chipCenter + vec2(-0.09, -chipHalf.y);
+        vec2 bottomEdgeD = chipCenter + vec2(-0.03, -chipHalf.y);
+        vec2 bottomEdgeE = chipCenter + vec2(0.03, -chipHalf.y);
+        vec2 bottomEdgeF = chipCenter + vec2(0.09, -chipHalf.y);
+        vec2 bottomEdgeG = chipCenter + vec2(0.15, -chipHalf.y);
+        vec2 bottomEdgeH = chipCenter + vec2(0.21, -chipHalf.y);
+        vec2 leftPinA = leftEdgeA + vec2(-0.052, 0.0);
+        vec2 leftPinB = leftEdgeB + vec2(-0.058, 0.0);
+        vec2 leftPinC = leftEdgeC + vec2(-0.058, 0.0);
+        vec2 leftPinD = leftEdgeD + vec2(-0.058, 0.0);
+        vec2 leftPinE = leftEdgeE + vec2(-0.052, 0.0);
+        vec2 rightPinA = rightEdgeA + vec2(0.052, 0.0);
+        vec2 rightPinB = rightEdgeB + vec2(0.058, 0.0);
+        vec2 rightPinC = rightEdgeC + vec2(0.058, 0.0);
+        vec2 rightPinD = rightEdgeD + vec2(0.058, 0.0);
+        vec2 rightPinE = rightEdgeE + vec2(0.052, 0.0);
+        vec2 topPinA = topEdgeA + vec2(0.0, 0.05);
+        vec2 topPinB = topEdgeB + vec2(0.0, 0.046);
+        vec2 topPinC = topEdgeC + vec2(0.0, 0.052);
+        vec2 topPinD = topEdgeD + vec2(0.0, 0.052);
+        vec2 topPinE = topEdgeE + vec2(0.0, 0.046);
+        vec2 topPinF = topEdgeF + vec2(0.0, 0.05);
+        vec2 bottomPinA = bottomEdgeA + vec2(0.0, -0.046);
+        vec2 bottomPinB = bottomEdgeB + vec2(0.0, -0.05);
+        vec2 bottomPinC = bottomEdgeC + vec2(0.0, -0.046);
+        vec2 bottomPinD = bottomEdgeD + vec2(0.0, -0.05);
+        vec2 bottomPinE = bottomEdgeE + vec2(0.0, -0.05);
+        vec2 bottomPinF = bottomEdgeF + vec2(0.0, -0.046);
+        vec2 bottomPinG = bottomEdgeG + vec2(0.0, -0.05);
+        vec2 bottomPinH = bottomEdgeH + vec2(0.0, -0.046);
+
+        float speed = mix(0.07, 0.24, clamp(uDataRate, 0.0, 1.0));
+        vec2 circuit = vec2(0.0);
+        float lineWidth = 0.0029;
+        float fineLine = lineWidth * 0.86;
+        float fillerLine = lineWidth * 0.78;
+        float pinLine = lineWidth * 0.72;
+        float boldLine = lineWidth * 1.08;
+
+        circuit += circuitSegment(centered, topPinA, topEdgeA, pinLine, 0.01, speed * 0.86);
+        circuit += circuitSegment(centered, topPinB, topEdgeB, pinLine, 0.07, speed * 0.88);
+        circuit += circuitSegment(centered, topPinC, topEdgeC, pinLine, 0.13, speed * 0.84);
+        circuit += circuitSegment(centered, topPinD, topEdgeD, pinLine, 0.19, speed * 0.84);
+        circuit += circuitSegment(centered, topPinE, topEdgeE, pinLine, 0.25, speed * 0.88);
+        circuit += circuitSegment(centered, topPinF, topEdgeF, pinLine, 0.31, speed * 0.86);
+        circuit += circuitSegment(centered, bottomPinA, bottomEdgeA, pinLine, 0.37, speed * 0.8);
+        circuit += circuitSegment(centered, bottomPinB, bottomEdgeB, pinLine, 0.43, speed * 0.78);
+        circuit += circuitSegment(centered, bottomPinC, bottomEdgeC, pinLine, 0.49, speed * 0.78);
+        circuit += circuitSegment(centered, bottomPinD, bottomEdgeD, pinLine, 0.55, speed * 0.78);
+        circuit += circuitSegment(centered, bottomPinE, bottomEdgeE, pinLine, 0.61, speed * 0.78);
+        circuit += circuitSegment(centered, bottomPinF, bottomEdgeF, pinLine, 0.67, speed * 0.8);
+        circuit += circuitSegment(centered, bottomPinG, bottomEdgeG, pinLine, 0.71, speed * 0.78);
+        circuit += circuitSegment(centered, bottomPinH, bottomEdgeH, pinLine, 0.75, speed * 0.8);
+        circuit += circuitSegment(centered, leftPinA, leftEdgeA, pinLine, 0.73, speed * 0.92);
+        circuit += circuitSegment(centered, leftPinB, leftEdgeB, pinLine, 0.79, speed * 0.9);
+        circuit += circuitSegment(centered, leftPinC, leftEdgeC, pinLine, 0.83, speed * 0.88);
+        circuit += circuitSegment(centered, leftPinD, leftEdgeD, pinLine, 0.87, speed * 0.88);
+        circuit += circuitSegment(centered, leftPinE, leftEdgeE, pinLine, 0.91, speed * 0.86);
+        circuit += circuitSegment(centered, rightPinA, rightEdgeA, pinLine, 0.97, speed * 0.92);
+        circuit += circuitSegment(centered, rightPinB, rightEdgeB, pinLine, 0.03, speed * 0.9);
+        circuit += circuitSegment(centered, rightPinC, rightEdgeC, pinLine, 0.07, speed * 0.88);
+        circuit += circuitSegment(centered, rightPinD, rightEdgeD, pinLine, 0.11, speed * 0.88);
+        circuit += circuitSegment(centered, rightPinE, rightEdgeE, pinLine, 0.15, speed * 0.86);
+${sensorFlowShader.routeShader}
+        float trace = clamp(circuit.x, 0.0, 1.0);
+        float pulse = clamp(circuit.y, 0.0, 1.0);
+        float nodes =
+          circuitNode(centered, topPinA, 0.0058) +
+          circuitNode(centered, topPinB, 0.0058) +
+          circuitNode(centered, topPinC, 0.005) +
+          circuitNode(centered, topPinD, 0.005) +
+          circuitNode(centered, topPinE, 0.0058) +
+          circuitNode(centered, topPinF, 0.0058) +
+          circuitNode(centered, leftPinA, 0.0058) +
+          circuitNode(centered, leftPinB, 0.0058) +
+          circuitNode(centered, leftPinC, 0.005) +
+          circuitNode(centered, leftPinD, 0.005) +
+          circuitNode(centered, leftPinE, 0.0058) +
+          circuitNode(centered, rightPinA, 0.0058) +
+          circuitNode(centered, rightPinB, 0.0058) +
+          circuitNode(centered, rightPinC, 0.005) +
+          circuitNode(centered, rightPinD, 0.005) +
+          circuitNode(centered, rightPinE, 0.0058) +
+          circuitNode(centered, bottomPinA, 0.0058) +
+          circuitNode(centered, bottomPinB, 0.0058) +
+          circuitNode(centered, bottomPinC, 0.005) +
+          circuitNode(centered, bottomPinD, 0.005) +
+          circuitNode(centered, bottomPinE, 0.0058) +
+          circuitNode(centered, bottomPinF, 0.0058) +
+          circuitNode(centered, bottomPinG, 0.0058) +
+          circuitNode(centered, bottomPinH, 0.0058) +
+${sensorFlowShader.nodeShader};
+        nodes = clamp(nodes, 0.0, 1.0);
+
+        float sideMask = 1.0 - smoothstep(0.5, 0.58, abs(centered.x));
+        float lengthMask = 1.0 - smoothstep(0.5, 0.58, abs(centered.y));
+        float coverage = sideMask * lengthMask;
+        float distanceFade = 1.0 - smoothstep(0.18, 0.92, length(centered - chipCenter));
+        float revealProgress = smoothstep(0.0, 1.0, uStrength);
+        float revealDistance = length((centered - chipCenter) * vec2(0.78, 0.62));
+        float revealRadius = mix(0.05, 0.74, revealProgress);
+        float revealMask = smoothstep(0.0, 0.16, revealRadius - revealDistance);
+        float hardTraceZone = 1.0 - smoothstep(0.72, 0.9, revealDistance);
+        float branchGlow = trace * revealMask * coverage * hardTraceZone * (0.52 + distanceFade * 0.28);
+        float nodeBlink = 0.72 + 0.28 * sin(uTime * (0.92 + uDataRate * 0.9) + centered.x * 7.0 + centered.y * 9.0);
+        float alpha = uStrength * (
+          areaGlow * 0.28 +
+          plateFill * 0.78 +
+          coreGlow * 0.62 +
+          border * 1.98 +
+          borderGlow * 1.08 +
+          branchGlow +
+          pulse * revealMask * hardTraceZone * 0.9 +
+          nodes * revealMask * hardTraceZone * (0.2 + 0.24 * nodeBlink)
+        );
+        float hotMix = clamp(
+          coreGlow * 0.72 +
+          pulse * revealMask * hardTraceZone * 0.48 +
+          trace * revealMask * hardTraceZone * 0.08 +
+          border * 0.48 +
+          nodes * revealMask * hardTraceZone * 0.18,
+          0.0,
+          1.0
+        );
+        vec3 color = mix(uBaseColor, uHotColor, hotMix);
         gl_FragColor = vec4(color, alpha);
       }
     `
@@ -25424,6 +26240,37 @@ void main() {
     topSheen.name = "soft_translucent_top_surface";
     topSheen.visible = false;
     topSheen.renderOrder = 9;
+    rippleSurfaces = [];
+    ["left", "right"].forEach((side) => {
+      const rippleSurface = new Mesh(new PlaneGeometry(2.64, 3.58), createRippleMaterial(side));
+      rippleSurface.name = `${side}_mattress_dot_ripple_overlay`;
+      rippleSurface.rotation.x = -Math.PI / 2;
+      rippleSurface.position.set(0, 0.562, 0.06);
+      rippleSurface.userData = {
+        isRipple: true,
+        side,
+        strength: 0
+      };
+      rippleSurface.visible = false;
+      rippleSurface.renderOrder = 26;
+      rippleSurfaces.push(rippleSurface);
+      bed.add(rippleSurface);
+    });
+    ["left", "right"].forEach((side) => {
+      const sensor = new Mesh(new PlaneGeometry(1.28, 3.7), createSensorFlowMaterial());
+      sensor.name = `${side}_heart_piezo_ceramic_sensor_flow`;
+      sensor.rotation.x = -Math.PI / 2;
+      sensor.position.set(side === "left" ? -0.69 : 0.69, 0.568, 0.1);
+      sensor.userData = {
+        isSensorFlow: true,
+        side,
+        strength: 0,
+        phase: side === "left" ? 0.13 : 0.57
+      };
+      sensor.renderOrder = 28;
+      bed.add(sensor);
+      sensorFlowSurfaces.push(sensor);
+    });
     zones.forEach((zone) => {
       ["left", "right"].forEach((side) => {
         const sliceMat = matOuterCover.clone();
@@ -25653,6 +26500,12 @@ void main() {
   function setDashboardData(payload = {}) {
     const source = payload.modes && typeof payload.modes === "object" ? payload.modes : payload;
     if (!source || typeof source !== "object") return false;
+    if (payload.sensorFlow && typeof payload.sensorFlow === "object") {
+      setSensorFlow(payload.sensorFlow, { postEvent: false });
+    }
+    if (payload.rippleEffect && typeof payload.rippleEffect === "object") {
+      setRippleEffect(payload.rippleEffect, { postEvent: false });
+    }
     const updatedModes = [];
     Object.entries(source).forEach(([mode, metrics]) => {
       if (setModeData(mode, metrics, { postEvent: false })) {
@@ -25666,6 +26519,26 @@ void main() {
     requestRender(settleTiming.reveal);
     postAppEvent("dashboardData", { modes: updatedModes });
     return true;
+  }
+  function setSensorFlow(nextFlow = {}, options = {}) {
+    if (!nextFlow || typeof nextFlow !== "object") return false;
+    const sideStateChanged = nextFlow.leftEnabled !== void 0 || nextFlow.rightEnabled !== void 0;
+    if (nextFlow.enabled !== void 0) sensorFlowState.enabled = Boolean(nextFlow.enabled);
+    if (nextFlow.leftEnabled !== void 0) sensorFlowState.leftEnabled = Boolean(nextFlow.leftEnabled);
+    if (nextFlow.rightEnabled !== void 0) sensorFlowState.rightEnabled = Boolean(nextFlow.rightEnabled);
+    if (nextFlow.enabled === void 0 && sideStateChanged) {
+      sensorFlowState.enabled = sensorFlowState.leftEnabled || sensorFlowState.rightEnabled;
+    }
+    const intensity = Number(nextFlow.intensity);
+    if (Number.isFinite(intensity)) sensorFlowState.intensity = MathUtils.clamp(intensity, 0, 1);
+    const dataRate = Number(nextFlow.dataRate);
+    if (Number.isFinite(dataRate)) sensorFlowState.dataRate = MathUtils.clamp(dataRate, 0, 1);
+    updateSensorFlowButtons();
+    requestRender(3200);
+    if (options.postEvent !== false) {
+      postAppEvent("sensorFlow", { sensorFlow: JSON.parse(JSON.stringify(sensorFlowState)) });
+    }
+    return getPublicState().sensorFlow;
   }
   function applyZoneTargets(config, coolDown = false) {
     const targetConfig = coolDown ? modes.flat : config;
@@ -25783,6 +26656,133 @@ void main() {
     requestRender(settleTiming.heat);
     postAppEvent("heating", { heating: JSON.parse(JSON.stringify(heatState)) });
     return getPublicState().heating;
+  }
+  function updateSensorFlowButtons() {
+    let activeCount = 0;
+    document.querySelectorAll("button[data-sensor-flow-side]").forEach((button) => {
+      const side = button.dataset.sensorFlowSide;
+      const active = sensorFlowState.enabled && (side === "left" ? sensorFlowState.leftEnabled : sensorFlowState.rightEnabled);
+      if (active) activeCount += 1;
+      button.classList.toggle("active", active);
+      button.setAttribute("aria-pressed", active ? "true" : "false");
+    });
+    const summary = document.querySelector("#sensorFlowSummary");
+    if (summary) summary.textContent = activeCount > 0 ? `${activeCount} ON` : "OFF";
+  }
+  function toggleSensorFlowSide(side) {
+    if (side !== "left" && side !== "right") return false;
+    const currentLeft = sensorFlowState.enabled && sensorFlowState.leftEnabled;
+    const currentRight = sensorFlowState.enabled && sensorFlowState.rightEnabled;
+    const nextLeft = side === "left" ? !currentLeft : currentLeft;
+    const nextRight = side === "right" ? !currentRight : currentRight;
+    const nextState = setSensorFlow({
+      enabled: nextLeft || nextRight,
+      leftEnabled: nextLeft,
+      rightEnabled: nextRight
+    });
+    const sideName = side === "left" ? "\u5DE6\u4FA7" : "\u53F3\u4FA7";
+    const statusText = document.querySelector("#statusText");
+    if (statusText) {
+      statusText.textContent = nextState.enabled ? `${sideName}\u538B\u7535\u91C7\u96C6\u5DF2\u5F00\u542F\uFF0C\u7535\u8DEF\u6570\u636E\u6D41\u6B63\u5728\u6C47\u805A` : "\u538B\u7535\u91C7\u96C6\u5DF2\u5173\u95ED";
+    }
+    return nextState;
+  }
+  function updateRippleButtons() {
+    document.querySelectorAll("button[data-ripple-side]").forEach((button) => {
+      const side = button.dataset.rippleSide;
+      const active = rippleState.sides[side]?.enabled === true;
+      button.classList.toggle("active", active);
+      button.setAttribute("aria-pressed", active ? "true" : "false");
+    });
+    const summary = document.querySelector("#rippleSummary");
+    if (summary) {
+      const activeCount = Number(rippleState.sides.left.enabled) + Number(rippleState.sides.right.enabled);
+      summary.textContent = activeCount === 2 ? "BOTH" : rippleState.sides.left.enabled ? "LEFT" : rippleState.sides.right.enabled ? "RIGHT" : "OFF";
+    }
+  }
+  function disableRippleSide(side) {
+    const sideState = getRippleSideState(side);
+    if (!sideState) return false;
+    const surface = getRippleSurface(side);
+    const changed = sideState.enabled || (surface?.userData?.strength ?? 0) > 6e-3;
+    sideState.enabled = false;
+    sideState.startedAt = 0;
+    resetRippleSurface(side);
+    return changed;
+  }
+  function clearRippleEffect() {
+    let changed = false;
+    ["left", "right"].forEach((side) => {
+      changed = disableRippleSide(side) || changed;
+    });
+    return changed;
+  }
+  function enableRippleSide(side, options = {}) {
+    if (!isValidSide(side)) return false;
+    const sideState = getRippleSideState(side);
+    if (!sideState) return false;
+    const restart = options.restart === true;
+    const surface = getRippleSurface(side);
+    const changed = restart || !sideState.enabled || (surface?.userData?.strength ?? 0) <= 6e-3;
+    sideState.enabled = true;
+    if (changed) {
+      sideState.startedAt = performance.now() / 1e3;
+    }
+    return changed;
+  }
+  function setRippleEffect(nextRipple = {}, options = {}) {
+    const nextState = typeof nextRipple === "boolean" ? { enabled: nextRipple } : nextRipple;
+    if (!nextState || typeof nextState !== "object") return false;
+    const intensity = Number(nextState.intensity);
+    if (Number.isFinite(intensity)) rippleState.intensity = MathUtils.clamp(intensity, 0, 1);
+    const hasSideFlags = nextState.leftEnabled !== void 0 || nextState.rightEnabled !== void 0;
+    const targetSide = isValidSide(nextState.side) ? nextState.side : nextState.leftEnabled ? "left" : nextState.rightEnabled ? "right" : getEnabledRippleSide() || "left";
+    let effectChanged = false;
+    if (nextState.trigger === true) {
+      effectChanged = enableRippleSide(targetSide, { restart: true });
+    } else if (hasSideFlags) {
+      if (nextState.leftEnabled === true) {
+        effectChanged = enableRippleSide("left") || effectChanged;
+      } else if (nextState.leftEnabled === false) {
+        effectChanged = disableRippleSide("left") || effectChanged;
+      }
+      if (nextState.rightEnabled === true) {
+        effectChanged = enableRippleSide("right") || effectChanged;
+      } else if (nextState.rightEnabled === false) {
+        effectChanged = disableRippleSide("right") || effectChanged;
+      }
+    } else if (nextState.enabled !== void 0) {
+      effectChanged = nextState.enabled ? enableRippleSide(targetSide) : isValidSide(nextState.side) ? disableRippleSide(nextState.side) : clearRippleEffect();
+    }
+    updateRippleButtons();
+    if (effectChanged || Number.isFinite(intensity)) {
+      requestRender(4200);
+    }
+    if (options.postEvent !== false) {
+      postAppEvent("rippleEffect", { rippleEffect: getPublicState().rippleEffect });
+    }
+    return getPublicState().rippleEffect;
+  }
+  function triggerRippleEffect(sideOrDuration, duration) {
+    const side = isValidSide(sideOrDuration) ? sideOrDuration : getEnabledRippleSide() || "left";
+    const nextState = setRippleEffect({ trigger: true, side, duration }, { postEvent: false });
+    const sideName = side === "left" ? "\u5DE6\u4FA7" : "\u53F3\u4FA7";
+    const statusText = document.querySelector("#statusText");
+    if (statusText) {
+      statusText.textContent = `${sideName}\u6CE2\u70B9\u6D9F\u6F2A\u5DF2\u5F00\u542F\u5FAA\u73AF\u64AD\u653E\uFF0C\u538B\u7535\u82AF\u7247\u9AD8\u4EAE\u5DF2\u540C\u6B65`;
+    }
+    postAppEvent("rippleEffect", { rippleEffect: nextState });
+    return nextState;
+  }
+  function toggleRippleEffect(side) {
+    if (!isValidSide(side)) return false;
+    const nextState = setRippleEffect({ side, enabled: !rippleState.sides[side].enabled });
+    const statusText = document.querySelector("#statusText");
+    if (statusText) {
+      const sideName = side === "left" ? "\u5DE6\u4FA7" : "\u53F3\u4FA7";
+      statusText.textContent = rippleState.sides[side].enabled ? `${sideName}\u6CE2\u70B9\u6D9F\u6F2A\u5DF2\u5F00\u542F\u5FAA\u73AF\u64AD\u653E\uFF0C\u538B\u7535\u82AF\u7247\u9AD8\u4EAE\u5DF2\u540C\u6B65` : `${sideName}\u6CE2\u70B9\u6D9F\u6F2A\u4E0E\u82AF\u7247\u9AD8\u4EAE\u5DF2\u5173\u95ED`;
+    }
+    return nextState;
   }
   function isValidSide(side) {
     return side === "left" || side === "right";
@@ -26079,6 +27079,8 @@ void main() {
     if (options.embedded !== void 0) setUIVisible(!Boolean(options.embedded));
     if (options.dashboardData) setDashboardData(options.dashboardData);
     if (options.heating) setHeating(options.heating);
+    if (options.sensorFlow) setSensorFlow(options.sensorFlow);
+    if (options.rippleEffect) setRippleEffect(options.rippleEffect);
     if (options.mode) setMode(options.mode);
     if (options.autorun === false && currentMode !== "flat") setMode("flat");
     requestRender(settleTiming.bootstrap);
@@ -26108,6 +27110,10 @@ void main() {
     setHeat,
     toggleHeat,
     setHeating,
+    setSensorFlow,
+    setRippleEffect,
+    triggerRippleEffect,
+    toggleRippleEffect,
     getState: getPublicState,
     setUIVisible,
     resetView,
@@ -26172,6 +27178,11 @@ void main() {
     const t = time * 1e-3;
     animationFrameId = 0;
     const nowMs = performance.now();
+    if (shouldThrottleOverlayRender(nowMs)) {
+      animationFrameId = requestAnimationFrame(animate);
+      return;
+    }
+    lastOverlayRenderAt = nowMs;
     const sequenceElapsedMs = adjustmentSequenceActive ? nowMs - adjustmentSequenceStart : 0;
     const hasManualBladder = Object.values(manualBladderControl.left).some(Boolean) || Object.values(manualBladderControl.right).some(Boolean);
     ["left", "right"].forEach((side) => {
@@ -26343,15 +27354,12 @@ void main() {
           tmpColor.lerpColors(new Color(2307661), new Color(6190216), child.userData.reveal * 0.42);
           child.material.color.copy(tmpColor);
           child.material.opacity = MathUtils.lerp(1, 0.34, child.userData.reveal);
-          if (child.material.transmission !== void 0) child.material.transmission = 0;
           child.material.roughness = MathUtils.lerp(0.86, 0.72, child.userData.reveal);
           child.material.depthWrite = child.userData.reveal < 0.42;
           if (child.material.emissiveIntensity !== void 0) child.material.emissiveIntensity = 0;
-          child.material.needsUpdate = true;
           return;
         }
         child.material.opacity = child.userData.baseOpacity ?? 1;
-        if (child.material.transmission !== void 0) child.material.transmission = 0;
         child.material.depthWrite = true;
         if (child.material.emissiveIntensity !== void 0) {
           child.material.emissiveIntensity = 0;
@@ -26370,11 +27378,9 @@ void main() {
       tmpColor.lerpColors(new Color(3229791), new Color(6387593), top.userData.reveal * 0.38);
       top.material.color.copy(tmpColor);
       top.material.opacity = MathUtils.lerp(1, 0.36, top.userData.reveal);
-      if (top.material.transmission !== void 0) top.material.transmission = 0;
       top.material.roughness = MathUtils.lerp(0.88, 0.74, top.userData.reveal);
       top.material.depthWrite = top.userData.reveal < 0.42;
       if (top.material.emissiveIntensity !== void 0) top.material.emissiveIntensity = 0;
-      top.material.needsUpdate = true;
     });
     labels.forEach((label) => {
       const root = label.parent;
@@ -26417,11 +27423,9 @@ void main() {
       tmpColor.lerpColors(new Color(3229792), new Color(7309208), slice.userData.reveal * 0.38);
       slice.material.color.copy(tmpColor);
       slice.material.opacity = slice.userData.reveal * 0.062;
-      slice.material.transmission = 0;
       slice.material.roughness = MathUtils.lerp(0.88, 0.74, slice.userData.reveal);
       slice.material.emissiveIntensity = 0;
       slice.material.depthWrite = false;
-      slice.material.needsUpdate = true;
     });
     heatZones.forEach((heat) => {
       const enabled = heatState[heat.userData.side]?.[heat.userData.key] === true;
@@ -26440,6 +27444,39 @@ void main() {
       heat.material.uniforms.uStrength.value = strength;
       heat.material.uniforms.uRevealDimming.value = revealDimming;
       heat.material.uniforms.uPhase.value = heat.userData.phase;
+    });
+    if (rippleSurfaces.length > 0) {
+      rippleSurfaces.forEach((rippleSurface) => {
+        const side = rippleSurface.userData.side;
+        const sideState = rippleState.sides[side];
+        const target = sideState.enabled ? rippleState.intensity : 0;
+        const fadeRate = target > rippleSurface.userData.strength ? 0.026 : 0.018;
+        rippleSurface.userData.strength += (target - rippleSurface.userData.strength) * fadeRate;
+        const strength = rippleSurface.userData.strength;
+        const breath = linearBreath(t, 6.2, side === "left" ? 0.12 : 0.24);
+        rippleSurface.visible = strength > 6e-3;
+        rippleSurface.position.y = 0.562 + breath * 2e-3;
+        rippleSurface.scale.set(1 + strength * 0.01, 1 + strength * 0.008, 1);
+        rippleSurface.material.uniforms.uTime.value = t;
+        rippleSurface.material.uniforms.uStrength.value = strength;
+        rippleSurface.material.uniforms.uBurstTime.value = t - sideState.startedAt;
+      });
+    }
+    sensorFlowSurfaces.forEach((sensor) => {
+      const sideEnabled = sensor.userData.side === "left" ? sensorFlowState.leftEnabled : sensorFlowState.rightEnabled;
+      const target = sensorFlowState.enabled && sideEnabled ? sensorFlowState.intensity : 0;
+      const fadeRate = target > sensor.userData.strength ? 0.018 : 0.014;
+      const sideRate = sensor.userData.side === "left" ? 0.92 : 1.08;
+      sensor.userData.strength += (target - sensor.userData.strength) * fadeRate * sideRate;
+      const strength = sensor.userData.strength;
+      const pulse = linearBreath(t, 5.6, sensor.userData.phase);
+      sensor.visible = strength > 6e-3;
+      sensor.position.y = 0.566 + pulse * 2e-3;
+      sensor.scale.set(1 + strength * 0.018, 1 + strength * 0.018, 1);
+      sensor.material.uniforms.uTime.value = t + sensor.userData.phase * 4;
+      sensor.material.uniforms.uStrength.value = strength;
+      sensor.material.uniforms.uDataRate.value = sensorFlowState.dataRate;
+      sensor.material.uniforms.uSideSign.value = sensor.userData.side === "left" ? -1 : 1;
     });
     bed.children.forEach((child) => {
       if (child.userData.scan) return;
@@ -26537,6 +27574,12 @@ void main() {
   document.querySelectorAll("button[data-heat-side]").forEach((button) => {
     button.addEventListener("click", () => toggleHeat(button.dataset.heatSide, button.dataset.heatZone));
   });
+  document.querySelectorAll("button[data-sensor-flow-side]").forEach((button) => {
+    button.addEventListener("click", () => toggleSensorFlowSide(button.dataset.sensorFlowSide));
+  });
+  document.querySelectorAll("button[data-ripple-side]").forEach((button) => {
+    button.addEventListener("click", () => toggleRippleEffect(button.dataset.rippleSide));
+  });
   canvas.addEventListener("pointermove", updatePointer);
   canvas.addEventListener("pointerdown", (event) => {
     autoCameraPausedUntil = performance.now() + 9e3;
@@ -26559,12 +27602,13 @@ void main() {
   });
   createScene().then(() => {
     updateHeatButtons();
+    updateRippleButtons();
     configureApp({ embedded: initialAppConfig.embedded === true, ...initialAppConfig });
     if (initialAppConfig.autorun !== true && !initialAppConfig.mode) setMode("flat");
     requestRender(settleTiming.bootstrap);
   }).catch((error) => {
     console.error(error);
-    const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+    const message = window.location.protocol === "file:" ? "\u68C0\u6D4B\u5230 file:// \u6253\u5F00\u65B9\u5F0F\u3002Chrome \u4F1A\u62E6\u622A Three.js \u901A\u8FC7 fetch \u8BFB\u53D6 GLB \u6A21\u578B\uFF0C\u8BF7\u6539\u7528 tool/preview_three_adjustment.sh \u6216\u672C\u5730 http \u670D\u52A1\u9884\u89C8\u3002" : error instanceof Error ? `${error.name}: ${error.message}` : String(error);
     document.querySelector("#statusText").textContent = `\u6A21\u578B\u521D\u59CB\u5316\u5931\u8D25\uFF1A${message}`;
   });
 })();

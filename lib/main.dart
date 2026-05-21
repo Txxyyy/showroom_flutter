@@ -1,20 +1,56 @@
 import 'dart:async';
-import 'dart:convert';
-import 'dart:io' as io;
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:webview_flutter/webview_flutter.dart';
-import 'package:webview_flutter_android/webview_flutter_android.dart';
 
 import 'app_environment.dart';
+import 'showroom_scene_embed.dart';
 
 const bool _enableMockDashboardStream = bool.fromEnvironment(
   'SHOWROOM_MOCK_STREAM',
   defaultValue: true,
 );
+
+enum ShowroomDashboardProfile {
+  smart,
+  light;
+
+  bool get isLight => this == ShowroomDashboardProfile.light;
+
+  String get headerTitle {
+    switch (this) {
+      case ShowroomDashboardProfile.smart:
+        return '智能床垫实时监测';
+      case ShowroomDashboardProfile.light:
+        return '智能床垫实时监测';
+    }
+  }
+
+  String statusFor(AdjustmentMode mode) {
+    switch (this) {
+      case ShowroomDashboardProfile.smart:
+        return mode.status;
+      case ShowroomDashboardProfile.light:
+        return '生命体征实时监测中，心率与呼吸率持续追踪';
+    }
+  }
+}
+
+enum _LightCenterPanelView {
+  controls,
+  intro;
+
+  String get title {
+    switch (this) {
+      case _LightCenterPanelView.controls:
+        return '演示控制';
+      case _LightCenterPanelView.intro:
+        return '产品介绍';
+    }
+  }
+}
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -34,7 +70,7 @@ Future<void> main() async {
   final AppEnvironmentConfig config = AppEnvironmentConfig.current;
   final Stream<Map<String, Object?>>? dashboardPayloadStream =
       config.environment == AppEnvironment.dev && _enableMockDashboardStream
-          ? _buildMockDashboardPayloadStream()
+          ? buildMockDashboardPayloadStream()
           : null;
   runApp(
     SmartMattressShowroomApp(
@@ -188,6 +224,34 @@ enum MattressHeatControl {
   }
 }
 
+enum MattressSensorFlowSide {
+  left,
+  right;
+
+  String get title {
+    switch (this) {
+      case MattressSensorFlowSide.left:
+        return '左侧压电';
+      case MattressSensorFlowSide.right:
+        return '右侧压电';
+    }
+  }
+}
+
+enum MattressRippleSide {
+  left,
+  right;
+
+  String get title {
+    switch (this) {
+      case MattressRippleSide.left:
+        return '左侧波点';
+      case MattressRippleSide.right:
+        return '右侧波点';
+    }
+  }
+}
+
 @immutable
 class MattressHeatingState {
   const MattressHeatingState({
@@ -296,6 +360,222 @@ class MattressRealtimeMetrics {
       heartRate: heartRate ?? this.heartRate,
       breathRate: breathRate ?? this.breathRate,
     );
+  }
+}
+
+@immutable
+class MattressSensorFlowState {
+  const MattressSensorFlowState({
+    this.enabled = false,
+    this.leftEnabled = false,
+    this.rightEnabled = false,
+    this.intensity = 0.78,
+    this.dataRate = 0.68,
+  });
+
+  static const MattressSensorFlowState defaults = MattressSensorFlowState();
+
+  final bool enabled;
+  final bool leftEnabled;
+  final bool rightEnabled;
+  final double intensity;
+  final double dataRate;
+
+  int get activeSideCount {
+    if (!enabled) {
+      return 0;
+    }
+    return <bool>[leftEnabled, rightEnabled]
+        .where((bool sideEnabled) => sideEnabled)
+        .length;
+  }
+
+  bool isSideEnabled(MattressSensorFlowSide side) {
+    if (!enabled) {
+      return false;
+    }
+    switch (side) {
+      case MattressSensorFlowSide.left:
+        return leftEnabled;
+      case MattressSensorFlowSide.right:
+        return rightEnabled;
+    }
+  }
+
+  MattressSensorFlowState toggleSide(MattressSensorFlowSide side) {
+    final bool currentLeft = isSideEnabled(MattressSensorFlowSide.left);
+    final bool currentRight = isSideEnabled(MattressSensorFlowSide.right);
+    final bool nextLeft =
+        side == MattressSensorFlowSide.left ? !currentLeft : currentLeft;
+    final bool nextRight =
+        side == MattressSensorFlowSide.right ? !currentRight : currentRight;
+    return copyWith(
+      enabled: nextLeft || nextRight,
+      leftEnabled: nextLeft,
+      rightEnabled: nextRight,
+    );
+  }
+
+  MattressSensorFlowState copyWith({
+    bool? enabled,
+    bool? leftEnabled,
+    bool? rightEnabled,
+    double? intensity,
+    double? dataRate,
+  }) {
+    return MattressSensorFlowState(
+      enabled: enabled ?? this.enabled,
+      leftEnabled: leftEnabled ?? this.leftEnabled,
+      rightEnabled: rightEnabled ?? this.rightEnabled,
+      intensity: intensity ?? this.intensity,
+      dataRate: dataRate ?? this.dataRate,
+    );
+  }
+
+  Map<String, Object> toJson() {
+    return <String, Object>{
+      'enabled': enabled,
+      'leftEnabled': leftEnabled,
+      'rightEnabled': rightEnabled,
+      'intensity': intensity,
+      'dataRate': dataRate,
+    };
+  }
+
+  @override
+  bool operator ==(Object other) {
+    return other is MattressSensorFlowState &&
+        other.enabled == enabled &&
+        other.leftEnabled == leftEnabled &&
+        other.rightEnabled == rightEnabled &&
+        other.intensity == intensity &&
+        other.dataRate == dataRate;
+  }
+
+  @override
+  int get hashCode {
+    return Object.hash(
+      enabled,
+      leftEnabled,
+      rightEnabled,
+      intensity,
+      dataRate,
+    );
+  }
+}
+
+@immutable
+class MattressRippleEffectState {
+  const MattressRippleEffectState({
+    this.enabled = false,
+    this.leftEnabled = false,
+    this.rightEnabled = false,
+    this.intensity = 0.86,
+  });
+
+  static const MattressRippleEffectState off = MattressRippleEffectState();
+
+  final bool enabled;
+  final bool leftEnabled;
+  final bool rightEnabled;
+  final double intensity;
+
+  int get activeSideCount {
+    if (!enabled) {
+      return 0;
+    }
+    return <bool>[leftEnabled, rightEnabled]
+        .where((bool sideEnabled) => sideEnabled)
+        .length;
+  }
+
+  MattressRippleSide? get activeSide {
+    if (activeSideCount != 1) {
+      return null;
+    }
+    if (leftEnabled) {
+      return MattressRippleSide.left;
+    }
+    if (rightEnabled) {
+      return MattressRippleSide.right;
+    }
+    return null;
+  }
+
+  String get summaryLabel {
+    switch (activeSideCount) {
+      case 0:
+        return 'OFF';
+      case 2:
+        return 'BOTH';
+      case 1:
+        return activeSide!.name.toUpperCase();
+    }
+    return 'OFF';
+  }
+
+  bool isSideEnabled(MattressRippleSide side) {
+    if (!enabled) {
+      return false;
+    }
+    switch (side) {
+      case MattressRippleSide.left:
+        return leftEnabled;
+      case MattressRippleSide.right:
+        return rightEnabled;
+    }
+  }
+
+  MattressRippleEffectState toggleSide(MattressRippleSide side) {
+    final bool currentLeft = isSideEnabled(MattressRippleSide.left);
+    final bool currentRight = isSideEnabled(MattressRippleSide.right);
+    final bool nextLeft =
+        side == MattressRippleSide.left ? !currentLeft : currentLeft;
+    final bool nextRight =
+        side == MattressRippleSide.right ? !currentRight : currentRight;
+    return copyWith(
+      enabled: nextLeft || nextRight,
+      leftEnabled: nextLeft,
+      rightEnabled: nextRight,
+    );
+  }
+
+  MattressRippleEffectState copyWith({
+    bool? enabled,
+    bool? leftEnabled,
+    bool? rightEnabled,
+    double? intensity,
+  }) {
+    return MattressRippleEffectState(
+      enabled: enabled ?? this.enabled,
+      leftEnabled: leftEnabled ?? this.leftEnabled,
+      rightEnabled: rightEnabled ?? this.rightEnabled,
+      intensity: intensity ?? this.intensity,
+    );
+  }
+
+  Map<String, Object?> toJson() {
+    return <String, Object?>{
+      'enabled': enabled,
+      'leftEnabled': leftEnabled,
+      'rightEnabled': rightEnabled,
+      'intensity': intensity,
+      'side': activeSide?.name,
+    };
+  }
+
+  @override
+  bool operator ==(Object other) {
+    return other is MattressRippleEffectState &&
+        other.enabled == enabled &&
+        other.leftEnabled == leftEnabled &&
+        other.rightEnabled == rightEnabled &&
+        other.intensity == intensity;
+  }
+
+  @override
+  int get hashCode {
+    return Object.hash(enabled, leftEnabled, rightEnabled, intensity);
   }
 }
 
@@ -439,6 +719,8 @@ class MattressModeMetrics {
 class MattressDashboardData {
   const MattressDashboardData({
     required this.realtime,
+    required this.sensorFlow,
+    required this.rippleEffect,
     required this.trend,
     required this.pressureChart,
     required this.modeMetrics,
@@ -449,6 +731,8 @@ class MattressDashboardData {
       heartRate: 70,
       breathRate: 16,
     ),
+    sensorFlow: MattressSensorFlowState.defaults,
+    rippleEffect: MattressRippleEffectState.off,
     trend: MattressTrendMetrics(
       lumbarSupportIndex: 84,
       lumbarSupportStatus: '优秀',
@@ -563,6 +847,8 @@ class MattressDashboardData {
   );
 
   final MattressRealtimeMetrics realtime;
+  final MattressSensorFlowState sensorFlow;
+  final MattressRippleEffectState rippleEffect;
   final MattressTrendMetrics trend;
   final MattressPressureChartData pressureChart;
   final Map<AdjustmentMode, MattressModeMetrics> modeMetrics;
@@ -575,12 +861,16 @@ class MattressDashboardData {
 
   MattressDashboardData copyWith({
     MattressRealtimeMetrics? realtime,
+    MattressSensorFlowState? sensorFlow,
+    MattressRippleEffectState? rippleEffect,
     MattressTrendMetrics? trend,
     MattressPressureChartData? pressureChart,
     Map<AdjustmentMode, MattressModeMetrics>? modeMetrics,
   }) {
     return MattressDashboardData(
       realtime: realtime ?? this.realtime,
+      sensorFlow: sensorFlow ?? this.sensorFlow,
+      rippleEffect: rippleEffect ?? this.rippleEffect,
       trend: trend ?? this.trend,
       pressureChart: pressureChart ?? this.pressureChart,
       modeMetrics: modeMetrics ?? this.modeMetrics,
@@ -601,6 +891,7 @@ class MattressDashboardData {
 
   Map<String, Object?> toWebViewPayload() {
     return <String, Object?>{
+      'sensorFlow': sensorFlow.toJson(),
       'modes': <String, Object?>{
         for (final MapEntry<AdjustmentMode, MattressModeMetrics> entry
             in modeMetrics.entries)
@@ -636,6 +927,44 @@ class MattressDashboardController extends ValueNotifier<MattressDashboardData> {
         realtime: current.realtime.copyWith(
           heartRate: heartRate,
           breathRate: breathRate,
+        ),
+      );
+    });
+  }
+
+  void updateSensorFlow({
+    bool? enabled,
+    bool? leftEnabled,
+    bool? rightEnabled,
+    double? intensity,
+    double? dataRate,
+  }) {
+    update((MattressDashboardData current) {
+      return current.copyWith(
+        sensorFlow: current.sensorFlow.copyWith(
+          enabled: enabled,
+          leftEnabled: leftEnabled,
+          rightEnabled: rightEnabled,
+          intensity: _clampUnit(intensity),
+          dataRate: _clampUnit(dataRate),
+        ),
+      );
+    });
+  }
+
+  void updateRippleEffect({
+    bool? enabled,
+    bool? leftEnabled,
+    bool? rightEnabled,
+    double? intensity,
+  }) {
+    update((MattressDashboardData current) {
+      return current.copyWith(
+        rippleEffect: current.rippleEffect.copyWith(
+          enabled: enabled,
+          leftEnabled: leftEnabled,
+          rightEnabled: rightEnabled,
+          intensity: _clampUnit(intensity),
         ),
       );
     });
@@ -684,6 +1013,33 @@ class MattressDashboardController extends ValueNotifier<MattressDashboardData> {
           realtime: next.realtime.copyWith(
             heartRate: _asInt(realtime['heartRate']),
             breathRate: _asInt(realtime['breathRate']),
+          ),
+        );
+      }
+
+      final Map<String, Object?>? sensorFlow =
+          _asObjectMap(payload['sensorFlow']);
+      if (sensorFlow != null) {
+        next = next.copyWith(
+          sensorFlow: next.sensorFlow.copyWith(
+            enabled: _asBool(sensorFlow['enabled']),
+            leftEnabled: _asBool(sensorFlow['leftEnabled']),
+            rightEnabled: _asBool(sensorFlow['rightEnabled']),
+            intensity: _clampUnit(_asDouble(sensorFlow['intensity'])),
+            dataRate: _clampUnit(_asDouble(sensorFlow['dataRate'])),
+          ),
+        );
+      }
+
+      final Map<String, Object?>? rippleEffect =
+          _asObjectMap(payload['rippleEffect']);
+      if (rippleEffect != null) {
+        next = next.copyWith(
+          rippleEffect: next.rippleEffect.copyWith(
+            enabled: _asBool(rippleEffect['enabled']),
+            leftEnabled: _asBool(rippleEffect['leftEnabled']),
+            rightEnabled: _asBool(rippleEffect['rightEnabled']),
+            intensity: _clampUnit(_asDouble(rippleEffect['intensity'])),
           ),
         );
       }
@@ -809,6 +1165,25 @@ int? _asInt(Object? value) {
   return null;
 }
 
+bool? _asBool(Object? value) {
+  if (value is bool) {
+    return value;
+  }
+  if (value is num) {
+    return value != 0;
+  }
+  if (value is String) {
+    final String normalized = value.toLowerCase();
+    if (normalized == 'true' || normalized == '1') {
+      return true;
+    }
+    if (normalized == 'false' || normalized == '0') {
+      return false;
+    }
+  }
+  return null;
+}
+
 double? _asDouble(Object? value) {
   if (value is double) {
     return value;
@@ -820,6 +1195,13 @@ double? _asDouble(Object? value) {
     return double.tryParse(value);
   }
   return null;
+}
+
+double? _clampUnit(double? value) {
+  if (value == null) {
+    return null;
+  }
+  return math.max(0, math.min(1, value));
 }
 
 String? _asString(Object? value) {
@@ -840,11 +1222,13 @@ List<String>? _asStringList(Object? value) {
   return value.map(_asString).whereType<String>().toList(growable: false);
 }
 
-Stream<Map<String, Object?>> _buildMockDashboardPayloadStream() {
+Stream<Map<String, Object?>> buildMockDashboardPayloadStream({
+  Duration interval = const Duration(seconds: 2),
+}) {
   return Stream<Map<String, Object?>>.periodic(
-    const Duration(seconds: 2),
+    interval,
     (int tick) => _mockDashboardPayload(tick),
-  );
+  ).asBroadcastStream();
 }
 
 Map<String, Object?> _mockDashboardPayload(int tick) {
@@ -990,6 +1374,20 @@ class SmartMattressShowroomApp extends StatelessWidget {
                 ),
               );
             },
+            onEnterLightSmartMattress: () {
+              Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (BuildContext context) {
+                    return ShowroomDashboardPage(
+                      profile: ShowroomDashboardProfile.light,
+                      dashboardData: dashboardData,
+                      dashboardController: dashboardController,
+                      dashboardPayloadStream: dashboardPayloadStream,
+                    );
+                  },
+                ),
+              );
+            },
           );
         },
       ),
@@ -1000,12 +1398,12 @@ class SmartMattressShowroomApp extends StatelessWidget {
 class ShowroomHomePage extends StatelessWidget {
   const ShowroomHomePage({
     required this.onEnterSmartMattress,
-    this.onEnterLightSmartMattress,
+    required this.onEnterLightSmartMattress,
     super.key,
   });
 
   final VoidCallback onEnterSmartMattress;
-  final VoidCallback? onEnterLightSmartMattress;
+  final VoidCallback onEnterLightSmartMattress;
 
   @override
   Widget build(BuildContext context) {
@@ -1023,11 +1421,19 @@ class ShowroomHomePage extends StatelessWidget {
           SafeArea(
             child: LayoutBuilder(
               builder: (BuildContext context, BoxConstraints constraints) {
-                final bool stacked = constraints.maxWidth < 720;
-                final EdgeInsets padding = EdgeInsets.symmetric(
-                  horizontal: stacked ? 24 : 76,
-                  vertical: stacked ? 22 : 42,
-                );
+                final bool compactLandscape = constraints.maxHeight < 520 &&
+                    constraints.maxWidth > constraints.maxHeight;
+                final bool stacked =
+                    constraints.maxWidth < 720 && !compactLandscape;
+                final EdgeInsets padding = compactLandscape
+                    ? const EdgeInsets.symmetric(
+                        horizontal: 22,
+                        vertical: 14,
+                      )
+                    : EdgeInsets.symmetric(
+                        horizontal: stacked ? 24 : 76,
+                        vertical: stacked ? 22 : 42,
+                      );
 
                 return Padding(
                   padding: padding,
@@ -1037,8 +1443,13 @@ class ShowroomHomePage extends StatelessWidget {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: <Widget>[
-                          const _HomeHeader(),
-                          SizedBox(height: stacked ? 18 : 42),
+                          _HomeHeader(compact: compactLandscape),
+                          SizedBox(
+                              height: compactLandscape
+                                  ? 14
+                                  : stacked
+                                      ? 18
+                                      : 42),
                           Expanded(
                             child: stacked
                                 ? Column(
@@ -1064,18 +1475,16 @@ class ShowroomHomePage extends StatelessWidget {
                                         child: _HomeEntryCard(
                                           title: '轻智能床垫大屏入口',
                                           eyebrow: 'LIGHT SMART',
-                                          status: '待接入',
-                                          summary: '轻量监测入口，保留同屏展示位',
+                                          status: '在线',
+                                          summary: '心率呼吸强化监测、轻量睡眠态势展示',
                                           metrics: const <String>[
-                                            '轻量',
-                                            '睡眠',
-                                            '概览',
+                                            '心率',
+                                            '呼吸率',
+                                            '趋势',
                                           ],
                                           icon: Icons.bedtime_outlined,
                                           accent: _rgb(71, 216, 147),
-                                          onTap: () =>
-                                              _handleLightSmartMattress(
-                                                  context),
+                                          onTap: onEnterLightSmartMattress,
                                         ),
                                       ),
                                     ],
@@ -1105,25 +1514,25 @@ class ShowroomHomePage extends StatelessWidget {
                                         child: _HomeEntryCard(
                                           title: '轻智能床垫大屏入口',
                                           eyebrow: 'LIGHT SMART',
-                                          status: '待接入',
-                                          summary: '轻量监测入口，保留同屏展示位',
+                                          status: '在线',
+                                          summary: '心率呼吸强化监测、轻量睡眠态势展示',
                                           metrics: const <String>[
-                                            '轻量',
-                                            '睡眠',
-                                            '概览',
+                                            '心率',
+                                            '呼吸率',
+                                            '趋势',
                                           ],
                                           icon: Icons.bedtime_outlined,
                                           accent: _rgb(71, 216, 147),
-                                          onTap: () =>
-                                              _handleLightSmartMattress(
-                                                  context),
+                                          onTap: onEnterLightSmartMattress,
                                         ),
                                       ),
                                     ],
                                   ),
                           ),
-                          SizedBox(height: stacked ? 16 : 28),
-                          const _HomeStatusStrip(),
+                          if (!compactLandscape) ...<Widget>[
+                            SizedBox(height: stacked ? 16 : 28),
+                            const _HomeStatusStrip(),
+                          ],
                         ],
                       ),
                     ),
@@ -1136,25 +1545,12 @@ class ShowroomHomePage extends StatelessWidget {
       ),
     );
   }
-
-  void _handleLightSmartMattress(BuildContext context) {
-    final VoidCallback? callback = onEnterLightSmartMattress;
-    if (callback != null) {
-      callback();
-      return;
-    }
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        behavior: SnackBarBehavior.floating,
-        backgroundColor: _rgb(5, 18, 34, 0.96),
-        content: const Text('轻智能床垫大屏入口待接入'),
-      ),
-    );
-  }
 }
 
 class _HomeHeader extends StatelessWidget {
-  const _HomeHeader();
+  const _HomeHeader({this.compact = false});
+
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
@@ -1171,19 +1567,19 @@ class _HomeHeader extends StatelessWidget {
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(
                   color: _rgb(57, 215, 255, 0.74),
-                  fontSize: 15,
+                  fontSize: compact ? 11 : 15,
                   fontWeight: FontWeight.w700,
-                  letterSpacing: 2.4,
+                  letterSpacing: compact ? 1.4 : 2.4,
                 ),
               ),
-              const SizedBox(height: 10),
+              SizedBox(height: compact ? 5 : 10),
               Text(
                 '智能睡眠展厅',
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(
                   color: _rgb(244, 248, 255),
-                  fontSize: 38,
+                  fontSize: compact ? 28 : 38,
                   fontWeight: FontWeight.w900,
                   letterSpacing: 0,
                   shadows: <Shadow>[
@@ -1304,10 +1700,29 @@ class _HomeEntryCard extends StatelessWidget {
             builder: (BuildContext context, BoxConstraints constraints) {
               final bool compact =
                   constraints.maxHeight < 360 || constraints.maxWidth < 360;
-              final double padding = compact ? 18 : 28;
-              final double iconSize = compact ? 42 : 54;
-              final double iconGlyphSize = compact ? 24 : 30;
-              final double titleSize = compact ? 24 : 31;
+              final bool short = constraints.maxHeight < 280;
+              final bool veryShort = constraints.maxHeight < 260;
+              final bool showMetrics = constraints.maxHeight >= 300;
+              final double padding = short
+                  ? 14
+                  : compact
+                      ? 18
+                      : 28;
+              final double iconSize = short
+                  ? 34
+                  : compact
+                      ? 42
+                      : 54;
+              final double iconGlyphSize = short
+                  ? 20
+                  : compact
+                      ? 24
+                      : 30;
+              final double titleSize = short
+                  ? 20
+                  : compact
+                      ? 24
+                      : 31;
 
               return ClipRRect(
                 borderRadius: BorderRadius.circular(8),
@@ -1371,7 +1786,10 @@ class _HomeEntryCard extends StatelessWidget {
                               _HomeStatusPill(label: status, accent: accent),
                             ],
                           ),
-                          const Spacer(),
+                          if (short)
+                            SizedBox(height: veryShort ? 8 : 12)
+                          else
+                            const Spacer(),
                           Text(
                             eyebrow,
                             maxLines: 1,
@@ -1383,7 +1801,12 @@ class _HomeEntryCard extends StatelessWidget {
                               letterSpacing: compact ? 1.2 : 1.8,
                             ),
                           ),
-                          SizedBox(height: compact ? 6 : 12),
+                          SizedBox(
+                              height: short
+                                  ? 4
+                                  : compact
+                                      ? 6
+                                      : 12),
                           Text(
                             title,
                             maxLines: 1,
@@ -1401,33 +1824,49 @@ class _HomeEntryCard extends StatelessWidget {
                               ],
                             ),
                           ),
-                          SizedBox(height: compact ? 8 : 14),
-                          Text(
-                            summary,
-                            maxLines: compact ? 1 : 2,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              color: _rgb(220, 232, 250, 0.70),
-                              fontSize: compact ? 13 : 16,
-                              height: compact ? 1.25 : 1.45,
-                              fontWeight: FontWeight.w400,
+                          if (!veryShort) ...<Widget>[
+                            SizedBox(
+                                height: short
+                                    ? 5
+                                    : compact
+                                        ? 8
+                                        : 14),
+                            Text(
+                              summary,
+                              maxLines: compact ? 1 : 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: _rgb(220, 232, 250, 0.70),
+                                fontSize: short
+                                    ? 12
+                                    : compact
+                                        ? 13
+                                        : 16,
+                                height: compact ? 1.25 : 1.45,
+                                fontWeight: FontWeight.w400,
+                              ),
                             ),
-                          ),
-                          SizedBox(height: compact ? 12 : 22),
-                          Wrap(
-                            spacing: compact ? 7 : 10,
-                            runSpacing: compact ? 7 : 10,
-                            children: metrics
-                                .map(
-                                  (String metric) => _HomeMetricChip(
-                                    label: metric,
-                                    accent: accent,
-                                    compact: compact,
-                                  ),
-                                )
-                                .toList(),
-                          ),
-                          const Spacer(),
+                            if (showMetrics) ...<Widget>[
+                              SizedBox(height: compact ? 12 : 22),
+                              Wrap(
+                                spacing: compact ? 7 : 10,
+                                runSpacing: compact ? 7 : 10,
+                                children: metrics
+                                    .map(
+                                      (String metric) => _HomeMetricChip(
+                                        label: metric,
+                                        accent: accent,
+                                        compact: compact,
+                                      ),
+                                    )
+                                    .toList(),
+                              ),
+                            ],
+                          ],
+                          if (short)
+                            SizedBox(height: veryShort ? 8 : 12)
+                          else
+                            const Spacer(),
                           Align(
                             alignment: Alignment.centerRight,
                             child: _HomeEnterButton(
@@ -1733,12 +2172,14 @@ class _HomeBackgroundPainter extends CustomPainter {
 
 class ShowroomDashboardPage extends StatefulWidget {
   const ShowroomDashboardPage({
+    this.profile = ShowroomDashboardProfile.smart,
     this.dashboardData = MattressDashboardData.defaults,
     this.dashboardController,
     this.dashboardPayloadStream,
     super.key,
   });
 
+  final ShowroomDashboardProfile profile;
   final MattressDashboardData dashboardData;
   final MattressDashboardController? dashboardController;
   final Stream<Map<String, Object?>>? dashboardPayloadStream;
@@ -1748,16 +2189,12 @@ class ShowroomDashboardPage extends StatefulWidget {
 }
 
 class _ShowroomDashboardPageState extends State<ShowroomDashboardPage> {
-  static const MethodChannel _androidAssetLoaderChannel =
-      MethodChannel('smart_mattress_asset_loader');
-  static const String _threeSceneAsset = 'assets/three_adjustment/index.html';
   static const Duration _dashboardFrameInterval = Duration(milliseconds: 33);
 
   late final ValueNotifier<int> _repaint;
-  late final WebViewController _webViewController;
+  late final SmartMattressSceneEmbedController _sceneController;
   Timer? _repaintTimer;
   StreamSubscription<Map<String, Object?>>? _dashboardPayloadSubscription;
-  io.HttpServer? _assetServer;
 
   AdjustmentMode _selectedMode = AdjustmentMode.flat;
   MattressHeatingState _heating = MattressHeatingState.off;
@@ -1767,10 +2204,12 @@ class _ShowroomDashboardPageState extends State<ShowroomDashboardPage> {
   bool _webViewReady = false;
   bool _webViewLoading = true;
   String? _webViewError;
+  _LightCenterPanelView _lightCenterPanelView = _LightCenterPanelView.controls;
 
   AdjustmentMode? _lastMode;
   MattressHeatingState? _lastHeating;
   MattressDashboardData? _lastDashboardData;
+  MattressRippleEffectState? _lastRippleEffect;
   int? _lastModeRestartToken;
   int? _lastResetToken;
   late MattressDashboardController _dashboardController;
@@ -1787,14 +2226,18 @@ class _ShowroomDashboardPageState extends State<ShowroomDashboardPage> {
         _repaint.value += 1;
       }
     });
-    _webViewController = _buildWebViewController();
-    unawaited(_loadThreeScene());
+    _sceneController = createSmartMattressSceneEmbedController(
+      onReady: _handleSceneReady,
+      onLoading: _handleSceneLoading,
+      onError: _handleSceneError,
+    );
+    unawaited(_sceneController.load());
   }
 
   @override
   void dispose() {
     _repaintTimer?.cancel();
-    unawaited(_assetServer?.close(force: true));
+    unawaited(_sceneController.dispose());
     unawaited(_dashboardPayloadSubscription?.cancel());
     _detachDashboardController();
     _repaint.dispose();
@@ -1868,174 +2311,41 @@ class _ShowroomDashboardPageState extends State<ShowroomDashboardPage> {
     unawaited(_applySmartMattressState());
   }
 
-  WebViewController _buildWebViewController() {
-    return WebViewController()
-      ..setJavaScriptMode(JavaScriptMode.unrestricted)
-      ..setBackgroundColor(Colors.transparent)
-      ..setOnConsoleMessage((JavaScriptConsoleMessage message) {
-        debugPrint(
-          'SmartMattress WebView [${message.level.name}]: ${message.message}',
-        );
-      })
-      ..addJavaScriptChannel(
-        'smartMattress',
-        onMessageReceived: _handleSmartMattressMessage,
-      )
-      ..addJavaScriptChannel(
-        'SmartMattressBridge',
-        onMessageReceived: _handleSmartMattressMessage,
-      )
-      ..setNavigationDelegate(
-        NavigationDelegate(
-          onPageFinished: (_) async {
-            try {
-              await _webViewController
-                  .runJavaScript(_smartMattressBridgeScript);
-              if (!mounted) {
-                return;
-              }
-              setState(() {
-                _webViewError = null;
-              });
-              unawaited(_applySmartMattressState());
-            } catch (error) {
-              if (!mounted) {
-                return;
-              }
-              setState(() {
-                _webViewLoading = false;
-                _webViewError = '$error';
-              });
-            }
-          },
-          onWebResourceError: (WebResourceError error) {
-            if (!mounted || error.isForMainFrame != true) {
-              return;
-            }
-            setState(() {
-              _webViewLoading = false;
-              _webViewError = error.description;
-            });
-          },
-        ),
-      );
-  }
-
-  Future<void> _loadThreeScene() async {
-    try {
-      if (io.Platform.isAndroid) {
-        await _loadAndroidAssetLoaderScene();
-      } else if (io.Platform.isIOS) {
-        await _loadIosAssetServerScene();
-      } else {
-        await _webViewController.loadFlutterAsset(_threeSceneAsset);
-      }
-    } catch (error) {
-      if (!mounted) {
-        return;
-      }
-      setState(() {
-        _webViewLoading = false;
-        _webViewError = '$error';
-      });
-    }
-  }
-
-  Future<void> _loadAndroidAssetLoaderScene() async {
-    final Object platformController = _webViewController.platform;
-    if (platformController is! AndroidWebViewController) {
-      throw StateError('Android WebView controller is unavailable.');
-    }
-
-    final Uri uri = _threeAssetUri(
-      scheme: 'https',
-      host: 'appassets.androidplatform.net',
-      pathPrefix: '/flutter_assets/',
-    );
-    await _androidAssetLoaderChannel.invokeMethod<void>(
-      'attach',
-      <String, Object>{
-        'webViewIdentifier': platformController.webViewIdentifier,
-      },
-    );
-    await _webViewController.loadRequest(uri);
-  }
-
-  Future<void> _loadIosAssetServerScene() async {
-    _assetServer ??= await _createFlutterAssetServer();
-    await _webViewController.loadRequest(
-      _threeAssetUri(
-        scheme: 'http',
-        host: io.InternetAddress.loopbackIPv4.address,
-        port: _assetServer!.port,
-        pathPrefix: '/',
-      ),
-    );
-  }
-
-  Future<io.HttpServer> _createFlutterAssetServer() async {
-    final io.HttpServer server = await io.HttpServer.bind(
-      io.InternetAddress.loopbackIPv4,
-      0,
-      shared: true,
-    );
-    server.listen(
-      _handleFlutterAssetRequest,
-      onError: (Object error, StackTrace stackTrace) {
-        debugPrint('SmartMattress asset server error: $error');
-      },
-    );
-    return server;
-  }
-
-  Future<void> _handleFlutterAssetRequest(io.HttpRequest request) async {
-    final String normalizedPath = request.uri.path.replaceFirst(
-      RegExp(r'^/+'),
-      '',
-    );
-    final String assetKey = normalizedPath.startsWith('assets/')
-        ? normalizedPath
-        : 'assets/$normalizedPath';
-    if (!assetKey.startsWith('assets/three_adjustment/')) {
-      request.response.statusCode = io.HttpStatus.notFound;
-      await request.response.close();
+  void _handleSceneReady() {
+    if (!mounted) {
       return;
     }
-
-    try {
-      final ByteData data = await rootBundle.load(assetKey);
-      request.response.headers.contentType = _assetContentType(assetKey);
-      request.response.contentLength = data.lengthInBytes;
-      request.response.add(data.buffer.asUint8List());
-    } catch (_) {
-      request.response.statusCode = io.HttpStatus.notFound;
-    } finally {
-      await request.response.close();
-    }
+    setState(() {
+      _webViewReady = true;
+      _webViewLoading = false;
+      _webViewError = null;
+    });
+    unawaited(_applySmartMattressState());
   }
 
-  void _handleSmartMattressMessage(JavaScriptMessage message) {
-    try {
-      final Object? payload = jsonDecode(message.message);
-      if (payload is! Map<String, Object?>) {
-        return;
-      }
-      final Object? type = payload['type'];
-      if (type == 'ready') {
-        if (!mounted) {
-          return;
-        }
-        setState(() {
-          _webViewReady = true;
-          _webViewLoading = false;
-          _webViewError = null;
-        });
-        unawaited(_applySmartMattressState());
-      }
-    } catch (_) {
-      // The native iOS bridge can deliver non-JSON messages. They are not
-      // needed for Flutter state sync.
+  void _handleSceneLoading(bool loading) {
+    if (!mounted) {
+      return;
     }
+    setState(() {
+      _webViewLoading = loading;
+      if (loading) {
+        _webViewError = null;
+      }
+    });
+  }
+
+  void _handleSceneError(String? error) {
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _webViewLoading = false;
+      _webViewError = error;
+      if (error != null) {
+        _webViewReady = false;
+      }
+    });
   }
 
   Future<void> _applySmartMattressState() async {
@@ -2047,45 +2357,39 @@ class _ShowroomDashboardPageState extends State<ShowroomDashboardPage> {
         _lastModeRestartToken != _modeRestartToken;
     final bool shouldApplyHeating = _lastHeating != _heating;
     final bool shouldApplyDashboardData = _lastDashboardData != _dashboardData;
+    final bool shouldApplyRippleEffect =
+        _lastRippleEffect != _dashboardData.rippleEffect;
     final bool shouldApplyReset = _lastResetToken != _resetToken;
     if (!shouldApplyMode &&
         !shouldApplyHeating &&
         !shouldApplyDashboardData &&
+        !shouldApplyRippleEffect &&
         !shouldApplyReset) {
       return;
     }
 
-    final String mode = jsonEncode(_selectedMode.rawValue);
-    final String heating = jsonEncode(_heating.toJson());
-    final String dashboardData = jsonEncode(_dashboardData.toWebViewPayload());
-    final String script = '''
-    (function retrySmartMattressState() {
-      if (window.SmartMattress3D && window.__smartMattressSetMode && window.__smartMattressSetHeating) {
-        if (${shouldApplyDashboardData ? 'true' : 'false'} && window.__smartMattressSetDashboardData) {
-          window.__smartMattressSetDashboardData($dashboardData);
-        }
-        if (${shouldApplyMode ? 'true' : 'false'}) {
-          window.__smartMattressSetMode($mode);
-        }
-        if (${shouldApplyHeating ? 'true' : 'false'}) {
-          window.__smartMattressSetHeating($heating);
-        }
-        if (${shouldApplyReset ? 'true' : 'false'} && window.__smartMattressResetView) {
-          window.__smartMattressResetView();
-        }
-        return true;
-      }
-      setTimeout(retrySmartMattressState, 120);
-      return false;
-    })();
-    ''';
-
     try {
-      await _webViewController.runJavaScript(script);
+      await _sceneController.applyUpdate(
+        SmartMattressSceneUpdate(
+          mode: shouldApplyMode ? _selectedMode.rawValue : null,
+          heating: shouldApplyHeating ? _heating.toJson() : null,
+          dashboardData: shouldApplyDashboardData
+              ? _dashboardData.toWebViewPayload()
+              : null,
+          sensorFlow: shouldApplyDashboardData
+              ? _dashboardData.sensorFlow.toJson()
+              : null,
+          rippleEffect: shouldApplyRippleEffect
+              ? _dashboardData.rippleEffect.toJson()
+              : null,
+          reset: shouldApplyReset,
+        ),
+      );
       _lastMode = _selectedMode;
       _lastModeRestartToken = _modeRestartToken;
       _lastHeating = _heating;
       _lastDashboardData = _dashboardData;
+      _lastRippleEffect = _dashboardData.rippleEffect;
       _lastResetToken = _resetToken;
     } catch (_) {
       // Keep the pending state. The next successful page finish or user action
@@ -2108,6 +2412,29 @@ class _ShowroomDashboardPageState extends State<ShowroomDashboardPage> {
     unawaited(_applySmartMattressState());
   }
 
+  void _toggleSensorFlow(MattressSensorFlowSide side) {
+    _dashboardController.update((MattressDashboardData current) {
+      return current.copyWith(sensorFlow: current.sensorFlow.toggleSide(side));
+    });
+  }
+
+  void _toggleRippleEffect(MattressRippleSide side) {
+    _dashboardController.update((MattressDashboardData current) {
+      return current.copyWith(
+        rippleEffect: current.rippleEffect.toggleSide(side),
+      );
+    });
+  }
+
+  void _setLightCenterPanelView(_LightCenterPanelView view) {
+    if (_lightCenterPanelView == view) {
+      return;
+    }
+    setState(() {
+      _lightCenterPanelView = view;
+    });
+  }
+
   void _reset() {
     setState(() {
       _selectedMode = AdjustmentMode.flat;
@@ -2115,6 +2442,16 @@ class _ShowroomDashboardPageState extends State<ShowroomDashboardPage> {
       _modeRestartToken += 1;
       _resetToken += 1;
     });
+    _dashboardController.updateSensorFlow(
+      enabled: false,
+      leftEnabled: false,
+      rightEnabled: false,
+    );
+    _dashboardController.updateRippleEffect(
+      enabled: false,
+      leftEnabled: false,
+      rightEnabled: false,
+    );
     unawaited(_applySmartMattressState());
   }
 
@@ -2125,7 +2462,10 @@ class _ShowroomDashboardPageState extends State<ShowroomDashboardPage> {
       body: LayoutBuilder(
         builder: (BuildContext context, BoxConstraints constraints) {
           final Size size = constraints.biggest;
-          final _ShowroomLayout layout = _ShowroomLayout(size);
+          final _ShowroomLayout layout = _ShowroomLayout(
+            size,
+            profile: widget.profile,
+          );
 
           return Stack(
             fit: StackFit.expand,
@@ -2135,6 +2475,7 @@ class _ShowroomDashboardPageState extends State<ShowroomDashboardPage> {
                   painter: _ShowroomPainter(
                     mode: _selectedMode,
                     data: _dashboardData,
+                    profile: widget.profile,
                     layer: _ShowroomPaintLayer.static,
                   ),
                   size: Size.infinite,
@@ -2145,6 +2486,7 @@ class _ShowroomDashboardPageState extends State<ShowroomDashboardPage> {
                   painter: _ShowroomPainter(
                     mode: _selectedMode,
                     data: _dashboardData,
+                    profile: widget.profile,
                     layer: _ShowroomPaintLayer.dynamic,
                     repaint: _repaint,
                   ),
@@ -2154,17 +2496,24 @@ class _ShowroomDashboardPageState extends State<ShowroomDashboardPage> {
               Positioned.fromRect(
                 rect: layout.bedFrame,
                 child: ClipRect(
-                  child: WebViewWidget(controller: _webViewController),
+                  child: _sceneController.buildWidget(),
                 ),
               ),
               Positioned.fromRect(
                 rect: layout.modePanelFrame,
                 child: _AdjustmentModePanel(
+                  profile: widget.profile,
                   selectedMode: _selectedMode,
                   heating: _heating,
+                  sensorFlow: _dashboardData.sensorFlow,
+                  rippleEffect: _dashboardData.rippleEffect,
+                  lightPanelView: _lightCenterPanelView,
                   scale: layout.scale,
                   onSelect: _selectMode,
                   onToggleHeat: _toggleHeat,
+                  onToggleSensorFlow: _toggleSensorFlow,
+                  onToggleRippleEffect: _toggleRippleEffect,
+                  onLightPanelViewChanged: _setLightCenterPanelView,
                   onReset: _reset,
                 ),
               ),
@@ -2215,19 +2564,33 @@ class _ShowroomDashboardPageState extends State<ShowroomDashboardPage> {
 
 class _AdjustmentModePanel extends StatelessWidget {
   const _AdjustmentModePanel({
+    required this.profile,
     required this.selectedMode,
     required this.heating,
+    required this.sensorFlow,
+    required this.rippleEffect,
+    required this.lightPanelView,
     required this.scale,
     required this.onSelect,
     required this.onToggleHeat,
+    required this.onToggleSensorFlow,
+    required this.onToggleRippleEffect,
+    required this.onLightPanelViewChanged,
     required this.onReset,
   });
 
+  final ShowroomDashboardProfile profile;
   final AdjustmentMode selectedMode;
   final MattressHeatingState heating;
+  final MattressSensorFlowState sensorFlow;
+  final MattressRippleEffectState rippleEffect;
+  final _LightCenterPanelView lightPanelView;
   final double scale;
   final ValueChanged<AdjustmentMode> onSelect;
   final ValueChanged<MattressHeatControl> onToggleHeat;
+  final ValueChanged<MattressSensorFlowSide> onToggleSensorFlow;
+  final ValueChanged<MattressRippleSide> onToggleRippleEffect;
+  final ValueChanged<_LightCenterPanelView> onLightPanelViewChanged;
   final VoidCallback onReset;
 
   static const List<AdjustmentMode> _primaryModes = <AdjustmentMode>[
@@ -2266,117 +2629,773 @@ class _AdjustmentModePanel extends StatelessWidget {
             ],
           ),
           child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: <Widget>[
-              Row(
-                children: <Widget>[
-                  Text(
-                    '调节模式',
-                    style: TextStyle(
-                      color: _rgb(244, 248, 255),
-                      fontSize: math.max(6.0, 15 * s),
-                      fontWeight: FontWeight.w900,
-                      letterSpacing: 0.04 * math.max(6.0, 15 * s),
-                      shadows: <Shadow>[
-                        Shadow(
-                          color: _rgb(36, 150, 255, 0.34),
-                          blurRadius: 5 * s,
-                        ),
-                      ],
-                    ),
-                  ),
-                  const Spacer(),
-                  _ModePill(label: selectedMode.label, scale: s),
-                ],
-              ),
-              SizedBox(height: 9 * s),
-              Row(
-                children: _primaryModes
-                    .map(
-                      (AdjustmentMode mode) => Expanded(
-                        child: Padding(
-                          padding: EdgeInsets.only(
-                            right: mode == _primaryModes.first ? 8 * s : 0,
-                          ),
-                          child: _ModeButton(
-                            title: mode.buttonTitle,
-                            active: mode == selectedMode,
-                            scale: s,
-                            onTap: () => onSelect(mode),
-                          ),
-                        ),
-                      ),
-                    )
-                    .toList(),
-              ),
-              SizedBox(height: 9 * s),
-              Row(
-                children: <Widget>[
-                  Text(
-                    '独立加热',
-                    style: TextStyle(
-                      color: _rgb(244, 248, 255, 0.84),
-                      fontSize: math.max(5.2, 12 * s),
-                      fontWeight: FontWeight.w900,
-                    ),
-                  ),
-                  const Spacer(),
-                  Text(
-                    heating.activeCount == 0
-                        ? 'OFF'
-                        : '${heating.activeCount} ZONES',
-                    style: TextStyle(
-                      color: heating.activeCount == 0
-                          ? _rgb(198, 224, 255, 0.62)
-                          : _rgb(255, 176, 78),
-                      fontSize: math.max(5.0, 10.5 * s),
-                      fontWeight: FontWeight.w700,
-                      fontFamily: 'monospace',
-                    ),
-                  ),
-                ],
-              ),
-              SizedBox(height: 4 * s),
-              Row(
-                children: <Widget>[
-                  _HeatButton(
-                    control: MattressHeatControl.leftWaist,
-                    active: heating.isEnabled(MattressHeatControl.leftWaist),
-                    scale: s,
-                    onTap: onToggleHeat,
-                  ),
-                  SizedBox(width: 7 * s),
-                  _HeatButton(
-                    control: MattressHeatControl.leftLeg,
-                    active: heating.isEnabled(MattressHeatControl.leftLeg),
-                    scale: s,
-                    onTap: onToggleHeat,
-                  ),
-                ],
-              ),
-              SizedBox(height: 4 * s),
-              Row(
-                children: <Widget>[
-                  _HeatButton(
-                    control: MattressHeatControl.rightWaist,
-                    active: heating.isEnabled(MattressHeatControl.rightWaist),
-                    scale: s,
-                    onTap: onToggleHeat,
-                  ),
-                  SizedBox(width: 7 * s),
-                  _HeatButton(
-                    control: MattressHeatControl.rightLeg,
-                    active: heating.isEnabled(MattressHeatControl.rightLeg),
-                    scale: s,
-                    onTap: onToggleHeat,
-                  ),
-                ],
-              ),
-              SizedBox(height: 6 * s),
-              _ResetButton(scale: s, onTap: onReset),
+              if (profile.isLight)
+                Expanded(child: _buildLightCenterPanel(s))
+              else
+                ..._buildSmartMattressControls(s),
             ],
           ),
         );
       },
+    );
+  }
+
+  Widget _buildLightCenterPanel(double s) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Row(
+          children: <Widget>[
+            Text(
+              lightPanelView == _LightCenterPanelView.controls
+                  ? '演示控制区'
+                  : '产品功能介绍',
+              style: TextStyle(
+                color: _rgb(244, 248, 255),
+                fontSize: math.max(6.0, 16 * s),
+                fontWeight: FontWeight.w900,
+                letterSpacing: 0.04 * math.max(6.0, 16 * s),
+                shadows: <Shadow>[
+                  Shadow(
+                    color: _rgb(36, 150, 255, 0.34),
+                    blurRadius: 5 * s,
+                  ),
+                ],
+              ),
+            ),
+            const Spacer(),
+            _LightPanelViewToggle(
+              activeView: lightPanelView,
+              scale: s,
+              onChanged: onLightPanelViewChanged,
+            ),
+          ],
+        ),
+        SizedBox(height: 10 * s),
+        Expanded(
+          child: ClipRect(
+            child: AnimatedSwitcher(
+              duration: const Duration(milliseconds: 320),
+              switchInCurve: Curves.easeOutCubic,
+              switchOutCurve: Curves.easeInCubic,
+              transitionBuilder: (Widget child, Animation<double> animation) {
+                final Animation<Offset> offsetAnimation = Tween<Offset>(
+                  begin: const Offset(0.05, 0),
+                  end: Offset.zero,
+                ).animate(
+                  CurvedAnimation(
+                    parent: animation,
+                    curve: Curves.easeOutCubic,
+                  ),
+                );
+                return FadeTransition(
+                  opacity: animation,
+                  child: SlideTransition(
+                    position: offsetAnimation,
+                    child: child,
+                  ),
+                );
+              },
+              child: KeyedSubtree(
+                key: ValueKey<_LightCenterPanelView>(lightPanelView),
+                child: lightPanelView == _LightCenterPanelView.controls
+                    ? _buildLightSensorControls(s)
+                    : _buildLightProductIntroduction(s),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildLightSensorControls(double s) {
+    return SizedBox.expand(
+      child: Column(
+        children: <Widget>[
+          Container(
+            height: 58 * s,
+            padding: EdgeInsets.symmetric(horizontal: 13 * s),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(8 * s),
+              color: _rgb(8, 31, 58, 0.70),
+              border: Border.all(
+                color: _rgb(73, 156, 255, 0.22),
+                width: math.max(0.5, s),
+              ),
+            ),
+            child: Row(
+              children: <Widget>[
+                Icon(
+                  Icons.memory_rounded,
+                  color: _rgb(57, 215, 255, 0.88),
+                  size: 22 * s,
+                ),
+                SizedBox(width: 10 * s),
+                Expanded(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      Text(
+                        '肩背部传感区域',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: _rgb(244, 248, 255, 0.92),
+                          fontSize: math.max(5.4, 12.5 * s),
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                      SizedBox(height: 4 * s),
+                      Text(
+                        '心率 ${sensorFlow.intensity.toStringAsFixed(2)}  呼吸 ${sensorFlow.dataRate.toStringAsFixed(2)}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: _rgb(198, 224, 255, 0.64),
+                          fontSize: math.max(4.8, 10.5 * s),
+                          fontWeight: FontWeight.w700,
+                          fontFamily: 'monospace',
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                SizedBox(width: 12 * s),
+                _ModePill(
+                  label: sensorFlow.activeSideCount == 0
+                      ? 'OFF'
+                      : '${sensorFlow.activeSideCount} SIDE',
+                  scale: s,
+                ),
+              ],
+            ),
+          ),
+          SizedBox(height: 10 * s),
+          Row(
+            children: <Widget>[
+              _SensorFlowButton(
+                side: MattressSensorFlowSide.left,
+                active: sensorFlow.isSideEnabled(MattressSensorFlowSide.left),
+                scale: s,
+                prominent: true,
+                onTap: onToggleSensorFlow,
+              ),
+              SizedBox(width: 9 * s),
+              _SensorFlowButton(
+                side: MattressSensorFlowSide.right,
+                active: sensorFlow.isSideEnabled(MattressSensorFlowSide.right),
+                scale: s,
+                prominent: true,
+                onTap: onToggleSensorFlow,
+              ),
+            ],
+          ),
+          SizedBox(height: 10 * s),
+          Row(
+            children: <Widget>[
+              Text(
+                '波点涟漪',
+                style: TextStyle(
+                  color: _rgb(244, 248, 255, 0.84),
+                  fontSize: math.max(5.2, 12 * s),
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+              const Spacer(),
+              Text(
+                rippleEffect.summaryLabel,
+                style: TextStyle(
+                  color: rippleEffect.activeSideCount == 0
+                      ? _rgb(198, 224, 255, 0.62)
+                      : _rgb(122, 255, 217),
+                  fontSize: math.max(5.0, 10.5 * s),
+                  fontWeight: FontWeight.w700,
+                  fontFamily: 'monospace',
+                ),
+              ),
+            ],
+          ),
+          SizedBox(height: 4 * s),
+          Row(
+            children: <Widget>[
+              _RippleEffectButton(
+                side: MattressRippleSide.left,
+                active: rippleEffect.isSideEnabled(MattressRippleSide.left),
+                scale: s,
+                onTap: onToggleRippleEffect,
+              ),
+              SizedBox(width: 7 * s),
+              _RippleEffectButton(
+                side: MattressRippleSide.right,
+                active: rippleEffect.isSideEnabled(MattressRippleSide.right),
+                scale: s,
+                onTap: onToggleRippleEffect,
+              ),
+            ],
+          ),
+          const Spacer(),
+          _ResetButton(scale: s, label: '关闭采集 / 复位', onTap: onReset),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildLightProductIntroduction(double s) {
+    return SizedBox.expand(
+      child: Column(
+        children: <Widget>[
+          Container(
+            height: 68 * s,
+            padding: EdgeInsets.symmetric(horizontal: 14 * s),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(8 * s),
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: <Color>[
+                  _rgb(13, 50, 86, 0.84),
+                  _rgb(8, 28, 52, 0.78),
+                ],
+              ),
+              border: Border.all(
+                color: _rgb(73, 156, 255, 0.24),
+                width: math.max(0.5, s),
+              ),
+            ),
+            child: Row(
+              children: <Widget>[
+                Container(
+                  width: 40 * s,
+                  height: 40 * s,
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(10 * s),
+                    color: _rgb(57, 215, 255, 0.12),
+                    border: Border.all(
+                      color: _rgb(93, 227, 255, 0.34),
+                      width: math.max(0.5, s),
+                    ),
+                  ),
+                  child: Icon(
+                    Icons.sensors_rounded,
+                    color: _rgb(93, 227, 255),
+                    size: 20 * s,
+                  ),
+                ),
+                SizedBox(width: 12 * s),
+                Expanded(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      Text(
+                        '压电生命体征感知',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: _rgb(244, 248, 255, 0.96),
+                          fontSize: math.max(5.8, 14 * s),
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                      SizedBox(height: 4 * s),
+                      Text(
+                        '嵌入式压电陶瓷可在睡眠过程中持续采集微弱生命体征信号，适合演示从感知到报告的完整链路。',
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: _rgb(208, 228, 250, 0.72),
+                          fontSize: math.max(4.8, 10.8 * s),
+                          height: 1.35,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                SizedBox(width: 12 * s),
+                Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: <Widget>[
+                    _CapabilityBadge(
+                      label: '无感采集',
+                      accent: _rgb(93, 227, 255),
+                      scale: s,
+                    ),
+                    SizedBox(height: 6 * s),
+                    _CapabilityBadge(
+                      label: '整夜追踪',
+                      accent: _rgb(122, 255, 217),
+                      scale: s,
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          SizedBox(height: 10 * s),
+          Expanded(
+            child: Row(
+              children: <Widget>[
+                _FeatureCard(
+                  icon: Icons.favorite_outline_rounded,
+                  accent: _rgb(255, 92, 138),
+                  title: '心率监测',
+                  description: '持续跟踪夜间心率变化，便于观察节律波动与恢复情况。',
+                  footer: '连续趋势',
+                  scale: s,
+                ),
+                SizedBox(width: 10 * s),
+                _FeatureCard(
+                  icon: Icons.air_rounded,
+                  accent: _rgb(118, 255, 187),
+                  title: '呼吸率监测',
+                  description: '捕捉呼吸频率与起伏节奏，为睡眠过程监测提供稳定输入。',
+                  footer: '节律识别',
+                  scale: s,
+                ),
+                SizedBox(width: 10 * s),
+                _FeatureCard(
+                  icon: Icons.description_outlined,
+                  accent: _rgb(88, 182, 255),
+                  title: '睡眠报告输出',
+                  description: '汇总核心体征与夜间趋势，支持生成更直观的睡眠摘要展示。',
+                  footer: '报告生成',
+                  scale: s,
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  List<Widget> _buildSmartMattressControls(double s) {
+    return <Widget>[
+      Row(
+        children: <Widget>[
+          Text(
+            '调节模式',
+            style: TextStyle(
+              color: _rgb(244, 248, 255),
+              fontSize: math.max(6.0, 15 * s),
+              fontWeight: FontWeight.w900,
+              letterSpacing: 0.04 * math.max(6.0, 15 * s),
+              shadows: <Shadow>[
+                Shadow(
+                  color: _rgb(36, 150, 255, 0.34),
+                  blurRadius: 5 * s,
+                ),
+              ],
+            ),
+          ),
+          const Spacer(),
+          _ModePill(label: selectedMode.label, scale: s),
+        ],
+      ),
+      SizedBox(height: 9 * s),
+      Row(
+        children: _primaryModes
+            .map(
+              (AdjustmentMode mode) => Expanded(
+                child: Padding(
+                  padding: EdgeInsets.only(
+                    right: mode == _primaryModes.first ? 8 * s : 0,
+                  ),
+                  child: _ModeButton(
+                    title: mode.buttonTitle,
+                    active: mode == selectedMode,
+                    scale: s,
+                    onTap: () => onSelect(mode),
+                  ),
+                ),
+              ),
+            )
+            .toList(),
+      ),
+      SizedBox(height: 9 * s),
+      Row(
+        children: <Widget>[
+          Text(
+            '压电采集',
+            style: TextStyle(
+              color: _rgb(244, 248, 255, 0.84),
+              fontSize: math.max(5.2, 12 * s),
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          const Spacer(),
+          Text(
+            sensorFlow.activeSideCount == 0
+                ? 'OFF'
+                : '${sensorFlow.activeSideCount} SIDE',
+            style: TextStyle(
+              color: sensorFlow.activeSideCount == 0
+                  ? _rgb(198, 224, 255, 0.62)
+                  : _rgb(57, 215, 255),
+              fontSize: math.max(5.0, 10.5 * s),
+              fontWeight: FontWeight.w700,
+              fontFamily: 'monospace',
+            ),
+          ),
+        ],
+      ),
+      SizedBox(height: 4 * s),
+      Row(
+        children: <Widget>[
+          _SensorFlowButton(
+            side: MattressSensorFlowSide.left,
+            active: sensorFlow.isSideEnabled(MattressSensorFlowSide.left),
+            scale: s,
+            onTap: onToggleSensorFlow,
+          ),
+          SizedBox(width: 7 * s),
+          _SensorFlowButton(
+            side: MattressSensorFlowSide.right,
+            active: sensorFlow.isSideEnabled(MattressSensorFlowSide.right),
+            scale: s,
+            onTap: onToggleSensorFlow,
+          ),
+        ],
+      ),
+      SizedBox(height: 8 * s),
+      Row(
+        children: <Widget>[
+          Text(
+            '波点涟漪',
+            style: TextStyle(
+              color: _rgb(244, 248, 255, 0.84),
+              fontSize: math.max(5.2, 12 * s),
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          const Spacer(),
+          Text(
+            rippleEffect.summaryLabel,
+            style: TextStyle(
+              color: rippleEffect.activeSideCount == 0
+                  ? _rgb(198, 224, 255, 0.62)
+                  : _rgb(122, 255, 217),
+              fontSize: math.max(5.0, 10.5 * s),
+              fontWeight: FontWeight.w700,
+              fontFamily: 'monospace',
+            ),
+          ),
+        ],
+      ),
+      SizedBox(height: 4 * s),
+      Row(
+        children: <Widget>[
+          _RippleEffectButton(
+            side: MattressRippleSide.left,
+            active: rippleEffect.isSideEnabled(MattressRippleSide.left),
+            scale: s,
+            onTap: onToggleRippleEffect,
+          ),
+          SizedBox(width: 7 * s),
+          _RippleEffectButton(
+            side: MattressRippleSide.right,
+            active: rippleEffect.isSideEnabled(MattressRippleSide.right),
+            scale: s,
+            onTap: onToggleRippleEffect,
+          ),
+        ],
+      ),
+      SizedBox(height: 8 * s),
+      Row(
+        children: <Widget>[
+          Text(
+            '独立加热',
+            style: TextStyle(
+              color: _rgb(244, 248, 255, 0.84),
+              fontSize: math.max(5.2, 12 * s),
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          const Spacer(),
+          Text(
+            heating.activeCount == 0 ? 'OFF' : '${heating.activeCount} ZONES',
+            style: TextStyle(
+              color: heating.activeCount == 0
+                  ? _rgb(198, 224, 255, 0.62)
+                  : _rgb(255, 176, 78),
+              fontSize: math.max(5.0, 10.5 * s),
+              fontWeight: FontWeight.w700,
+              fontFamily: 'monospace',
+            ),
+          ),
+        ],
+      ),
+      SizedBox(height: 4 * s),
+      Row(
+        children: <Widget>[
+          _HeatButton(
+            control: MattressHeatControl.leftWaist,
+            active: heating.isEnabled(MattressHeatControl.leftWaist),
+            scale: s,
+            onTap: onToggleHeat,
+          ),
+          SizedBox(width: 7 * s),
+          _HeatButton(
+            control: MattressHeatControl.leftLeg,
+            active: heating.isEnabled(MattressHeatControl.leftLeg),
+            scale: s,
+            onTap: onToggleHeat,
+          ),
+        ],
+      ),
+      SizedBox(height: 4 * s),
+      Row(
+        children: <Widget>[
+          _HeatButton(
+            control: MattressHeatControl.rightWaist,
+            active: heating.isEnabled(MattressHeatControl.rightWaist),
+            scale: s,
+            onTap: onToggleHeat,
+          ),
+          SizedBox(width: 7 * s),
+          _HeatButton(
+            control: MattressHeatControl.rightLeg,
+            active: heating.isEnabled(MattressHeatControl.rightLeg),
+            scale: s,
+            onTap: onToggleHeat,
+          ),
+        ],
+      ),
+      SizedBox(height: 6 * s),
+      _ResetButton(scale: s, onTap: onReset),
+    ];
+  }
+}
+
+class _LightPanelViewToggle extends StatelessWidget {
+  const _LightPanelViewToggle({
+    required this.activeView,
+    required this.scale,
+    required this.onChanged,
+  });
+
+  final _LightCenterPanelView activeView;
+  final double scale;
+  final ValueChanged<_LightCenterPanelView> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final double s = scale;
+    return Container(
+      width: 166 * s,
+      height: 30 * s,
+      padding: EdgeInsets.all(2 * s),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(999 * s),
+        color: _rgb(8, 28, 52, 0.86),
+        border: Border.all(
+          color: _rgb(73, 156, 255, 0.24),
+          width: math.max(0.5, s),
+        ),
+      ),
+      child: Row(
+        children: _LightCenterPanelView.values
+            .map(
+              (_LightCenterPanelView view) => Expanded(
+                child: Material(
+                  color: Colors.transparent,
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(999 * s),
+                    onTap: () => onChanged(view),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 220),
+                      curve: Curves.easeOutCubic,
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(999 * s),
+                        gradient: activeView == view
+                            ? LinearGradient(
+                                colors: <Color>[
+                                  _rgb(43, 162, 255, 0.84),
+                                  _rgb(15, 103, 198, 0.74),
+                                ],
+                              )
+                            : null,
+                        color: activeView == view ? null : Colors.transparent,
+                      ),
+                      child: Center(
+                        child: Text(
+                          view.title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: activeView == view
+                                ? Colors.white
+                                : _rgb(208, 228, 250, 0.72),
+                            fontSize: math.max(4.8, 10.8 * s),
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            )
+            .toList(),
+      ),
+    );
+  }
+}
+
+class _CapabilityBadge extends StatelessWidget {
+  const _CapabilityBadge({
+    required this.label,
+    required this.accent,
+    required this.scale,
+  });
+
+  final String label;
+  final Color accent;
+  final double scale;
+
+  @override
+  Widget build(BuildContext context) {
+    final double s = scale;
+    return Container(
+      height: 22 * s,
+      padding: EdgeInsets.symmetric(horizontal: 8 * s),
+      decoration: ShapeDecoration(
+        color: accent.withOpacity(0.10),
+        shape: StadiumBorder(
+          side: BorderSide(
+            color: accent.withOpacity(0.28),
+            width: math.max(0.5, s),
+          ),
+        ),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          Container(
+            width: 5 * s,
+            height: 5 * s,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: accent,
+            ),
+          ),
+          SizedBox(width: 5 * s),
+          Text(
+            label,
+            style: TextStyle(
+              color: _rgb(231, 243, 255, 0.88),
+              fontSize: math.max(4.5, 9.8 * s),
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _FeatureCard extends StatelessWidget {
+  const _FeatureCard({
+    required this.icon,
+    required this.accent,
+    required this.title,
+    required this.description,
+    required this.footer,
+    required this.scale,
+  });
+
+  final IconData icon;
+  final Color accent;
+  final String title;
+  final String description;
+  final String footer;
+  final double scale;
+
+  @override
+  Widget build(BuildContext context) {
+    final double s = scale;
+    return Expanded(
+      child: Container(
+        padding: EdgeInsets.fromLTRB(14 * s, 12 * s, 14 * s, 12 * s),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(8 * s),
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: <Color>[
+              accent.withOpacity(0.14),
+              _rgb(7, 23, 44, 0.88),
+            ],
+          ),
+          border: Border.all(
+            color: accent.withOpacity(0.26),
+            width: math.max(0.5, s),
+          ),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Row(
+              children: <Widget>[
+                Container(
+                  width: 30 * s,
+                  height: 30 * s,
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(8 * s),
+                    color: accent.withOpacity(0.12),
+                    border: Border.all(
+                      color: accent.withOpacity(0.24),
+                      width: math.max(0.5, s),
+                    ),
+                  ),
+                  child: Icon(
+                    icon,
+                    color: accent,
+                    size: 16 * s,
+                  ),
+                ),
+                const Spacer(),
+                _CapabilityBadge(
+                  label: footer,
+                  accent: accent,
+                  scale: s,
+                ),
+              ],
+            ),
+            SizedBox(height: 12 * s),
+            Text(
+              title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: _rgb(244, 248, 255),
+                fontSize: math.max(5.5, 13 * s),
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+            SizedBox(height: 8 * s),
+            Expanded(
+              child: Text(
+                description,
+                maxLines: 4,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: _rgb(208, 228, 250, 0.70),
+                  fontSize: math.max(4.8, 10.6 * s),
+                  height: 1.45,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -2506,6 +3525,178 @@ class _ModeButton extends StatelessWidget {
   }
 }
 
+class _SensorFlowButton extends StatelessWidget {
+  const _SensorFlowButton({
+    required this.side,
+    required this.active,
+    required this.scale,
+    required this.onTap,
+    this.prominent = false,
+  });
+
+  final MattressSensorFlowSide side;
+  final bool active;
+  final double scale;
+  final ValueChanged<MattressSensorFlowSide> onTap;
+  final bool prominent;
+
+  @override
+  Widget build(BuildContext context) {
+    final double s = scale;
+    return Expanded(
+      child: SizedBox(
+        height: (prominent ? 42 : 25) * s,
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            borderRadius: BorderRadius.circular(6 * s),
+            onTap: () => onTap(side),
+            child: Ink(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(6 * s),
+                gradient: active
+                    ? LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: <Color>[
+                          _rgb(36, 196, 255, 0.72),
+                          _rgb(13, 93, 190, 0.62),
+                        ],
+                      )
+                    : null,
+                color: active ? null : _rgb(10, 43, 76, 0.58),
+                border: Border.all(
+                  color: active
+                      ? _rgb(139, 232, 255, 0.84)
+                      : _rgb(73, 156, 255, 0.24),
+                  width: math.max(0.5, s),
+                ),
+                boxShadow: active
+                    ? <BoxShadow>[
+                        BoxShadow(
+                          color: _rgb(32, 185, 255, 0.34),
+                          blurRadius: 14 * s,
+                        ),
+                      ]
+                    : null,
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: <Widget>[
+                  Icon(
+                    Icons.sensors_outlined,
+                    color: active ? Colors.white : _rgb(220, 242, 255, 0.72),
+                    size: (prominent ? 16 : 13) * s,
+                  ),
+                  SizedBox(width: (prominent ? 7 : 5) * s),
+                  Flexible(
+                    child: Text(
+                      side.title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color:
+                            active ? Colors.white : _rgb(235, 247, 255, 0.76),
+                        fontSize: math.max(5.0, (prominent ? 12.5 : 11.5) * s),
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _RippleEffectButton extends StatelessWidget {
+  const _RippleEffectButton({
+    required this.side,
+    required this.active,
+    required this.scale,
+    required this.onTap,
+  });
+
+  final MattressRippleSide side;
+  final bool active;
+  final double scale;
+  final ValueChanged<MattressRippleSide> onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final double s = scale;
+    return Expanded(
+      child: SizedBox(
+        height: 25 * s,
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            borderRadius: BorderRadius.circular(6 * s),
+            onTap: () => onTap(side),
+            child: Ink(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(6 * s),
+                gradient: active
+                    ? LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: <Color>[
+                          _rgb(52, 220, 194, 0.72),
+                          _rgb(18, 102, 178, 0.62),
+                        ],
+                      )
+                    : null,
+                color: active ? null : _rgb(10, 54, 58, 0.58),
+                border: Border.all(
+                  color: active
+                      ? _rgb(150, 255, 226, 0.86)
+                      : _rgb(122, 255, 217, 0.24),
+                  width: math.max(0.5, s),
+                ),
+                boxShadow: active
+                    ? <BoxShadow>[
+                        BoxShadow(
+                          color: _rgb(122, 255, 217, 0.30),
+                          blurRadius: 14 * s,
+                        ),
+                      ]
+                    : null,
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: <Widget>[
+                  Icon(
+                    Icons.blur_circular_rounded,
+                    color: active ? Colors.white : _rgb(220, 255, 246, 0.72),
+                    size: 13 * s,
+                  ),
+                  SizedBox(width: 5 * s),
+                  Flexible(
+                    child: Text(
+                      side.title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color:
+                            active ? Colors.white : _rgb(235, 255, 248, 0.76),
+                        fontSize: math.max(5.0, 11.5 * s),
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _HeatButton extends StatelessWidget {
   const _HeatButton({
     required this.control,
@@ -2580,10 +3771,15 @@ class _HeatButton extends StatelessWidget {
 }
 
 class _ResetButton extends StatelessWidget {
-  const _ResetButton({required this.scale, required this.onTap});
+  const _ResetButton({
+    required this.scale,
+    required this.onTap,
+    this.label = '恢复初始状态',
+  });
 
   final double scale;
   final VoidCallback onTap;
+  final String label;
 
   @override
   Widget build(BuildContext context) {
@@ -2607,7 +3803,7 @@ class _ResetButton extends StatelessWidget {
             ),
             child: Center(
               child: Text(
-                '恢复初始状态',
+                label,
                 style: TextStyle(
                   color: _rgb(235, 247, 255, 0.88),
                   fontSize: math.max(5.4, 12.5 * s),
@@ -2623,8 +3819,10 @@ class _ResetButton extends StatelessWidget {
 }
 
 class _ShowroomLayout {
-  _ShowroomLayout(Size size)
-      : scale =
+  _ShowroomLayout(
+    Size size, {
+    required this.profile,
+  })  : scale =
             math.min(size.width / _designWidth, size.height / _designHeight),
         offsetX = (size.width -
                 _designWidth *
@@ -2641,9 +3839,12 @@ class _ShowroomLayout {
                     )) *
             0.5 {
     bedFrame = _scaleRect(_bedDesignFrame);
-    modePanelFrame = _scaleRect(_modePanelDesignFrame);
+    modePanelFrame = _scaleRect(
+      profile.isLight ? _lightModePanelDesignFrame : _modePanelDesignFrame,
+    );
   }
 
+  final ShowroomDashboardProfile profile;
   final double scale;
   final double offsetX;
   final double offsetY;
@@ -2651,7 +3852,9 @@ class _ShowroomLayout {
   late final Rect modePanelFrame;
 
   static const Rect _bedDesignFrame = Rect.fromLTWH(601, 138, 718, 700);
-  static const Rect _modePanelDesignFrame = Rect.fromLTWH(620, 812, 380, 222);
+  static const Rect _modePanelDesignFrame = Rect.fromLTWH(620, 764, 380, 270);
+  static const Rect _lightModePanelDesignFrame =
+      Rect.fromLTWH(620, 764, 699, 270);
 
   Rect _scaleRect(Rect rect) {
     return Rect.fromLTWH(
@@ -2667,12 +3870,14 @@ class _ShowroomPainter extends CustomPainter {
   _ShowroomPainter({
     required this.mode,
     required this.data,
+    required this.profile,
     required this.layer,
     Listenable? repaint,
   }) : super(repaint: repaint);
 
   final AdjustmentMode mode;
   final MattressDashboardData data;
+  final ShowroomDashboardProfile profile;
   final _ShowroomPaintLayer layer;
   late Canvas _canvas;
   late DateTime _now;
@@ -2729,6 +3934,7 @@ class _ShowroomPainter extends CustomPainter {
   bool shouldRepaint(covariant _ShowroomPainter oldDelegate) {
     return oldDelegate.mode != mode ||
         oldDelegate.data != data ||
+        oldDelegate.profile != profile ||
         oldDelegate.layer != layer;
   }
 
@@ -2747,12 +3953,20 @@ class _ShowroomPainter extends CustomPainter {
 
   void _drawDynamicOverlay() {
     _drawHeaderTime();
-    _drawMetricDynamics(44, 138);
-    _drawMetricDynamics(1351, 138);
-    _drawChartDynamic(44 + 22, 138 + 624 + 104, 481, 170, data.pressureChart);
-    _drawChartDynamic(1351 + 22, 138 + 624 + 104, 481, 170, data.pressureChart);
+    if (profile.isLight) {
+      _drawVitalFocusDynamics(44, 138);
+      _drawVitalFocusDynamics(1351, 138);
+    } else {
+      _drawMetricDynamics(44, 138);
+      _drawMetricDynamics(1351, 138);
+      _drawChartDynamic(44 + 22, 138 + 624 + 104, 481, 170, data.pressureChart);
+      _drawChartDynamic(
+          1351 + 22, 138 + 624 + 104, 481, 170, data.pressureChart);
+    }
     _drawBottomPulseLine(includeTrack: false, includeSweep: true);
-    _drawFooter();
+    if (!profile.isLight) {
+      _drawFooter();
+    }
   }
 
   void _drawBackground() {
@@ -2828,7 +4042,7 @@ class _ShowroomPainter extends CustomPainter {
     _drawHeaderLine(369, 62, 350);
     _drawHeaderLine(1201, 62, 350);
     _drawText(
-      '智能床垫实时监测',
+      profile.headerTitle,
       x: 960,
       y: 68,
       size: 43,
@@ -2839,7 +4053,7 @@ class _ShowroomPainter extends CustomPainter {
       glow: blue.withOpacity(0.42),
     );
     _drawText(
-      mode.status,
+      profile.statusFor(mode),
       x: 960,
       y: 112,
       size: 17,
@@ -2904,6 +4118,10 @@ class _ShowroomPainter extends CustomPainter {
   void _drawSide(double x, double y, bool isLeft) {
     final String side = isLeft ? '左侧' : '右侧';
     final String pill = isLeft ? '调节阈值-Pa' : '温感舱-Pa';
+    if (profile.isLight) {
+      _drawVitalFocusPanel(x, y, side);
+      return;
+    }
     _drawRealtimePanel(x, y, side);
     _drawTrendPanel(x, y + 262);
     _drawPressurePanel(x, y + 624, pill);
@@ -3134,6 +4352,234 @@ class _ShowroomPainter extends CustomPainter {
       accent,
       phase,
       includeBase: false,
+    );
+  }
+
+  void _drawVitalFocusPanel(double x, double y, String side) {
+    const double cardTop = 108;
+    const double cardGap = 34;
+    const double cardHeight = 368;
+    _drawPanel(Rect.fromLTWH(x, y, 525, 920), 18);
+    _drawText(
+      '$side生命体征强化监测',
+      x: x + 22,
+      y: y + 38,
+      size: 21,
+      color: text,
+      align: _CanvasTextAlign.left,
+      weight: FontWeight.w700,
+      tracking: 0.7,
+    );
+    _drawText(
+      '生命体征核心态势',
+      x: x + 22,
+      y: y + 68,
+      size: 14,
+      color: muted,
+      align: _CanvasTextAlign.left,
+      weight: FontWeight.w400,
+      tracking: 0.4,
+    );
+    final Rect liveRect = Rect.fromLTWH(x + 406, y + 22, 97, 34);
+    _canvas.drawRRect(
+      _rrect(liveRect, 10),
+      Paint()..color = cyan.withOpacity(0.12),
+    );
+    _strokeRRect(_rrect(liveRect, 10), cyan.withOpacity(0.24), 1);
+    _drawOvalGlow(
+      Rect.fromCircle(
+          center: Offset(liveRect.left + 18, liveRect.center.dy), radius: 4),
+      green,
+      green.withOpacity(0.78),
+      8,
+    );
+    _drawText(
+      'LIVE',
+      x: liveRect.left + 32,
+      y: y + 44,
+      size: 12,
+      color: text.withOpacity(0.86),
+      align: _CanvasTextAlign.left,
+      weight: FontWeight.w700,
+      tracking: 1,
+    );
+    _drawVitalHeroCard(
+      x + 22,
+      y + cardTop,
+      481,
+      cardHeight,
+      '心率',
+      data.realtime.heartRate.toString(),
+      '次/分',
+      '低波动实时追踪',
+      pink,
+      true,
+    );
+    _drawVitalHeroCard(
+      x + 22,
+      y + cardTop + cardHeight + cardGap,
+      481,
+      cardHeight,
+      '呼吸率',
+      data.realtime.breathRate.toString(),
+      '次/分',
+      '平稳节律实时追踪',
+      green,
+      false,
+    );
+  }
+
+  void _drawVitalHeroCard(
+    double x,
+    double y,
+    double width,
+    double height,
+    String title,
+    String value,
+    String unit,
+    String subtitle,
+    Color accent,
+    bool isHeart,
+  ) {
+    final double phase = _phase(isHeart ? 1.4 : 2.8);
+    final double pulseValue = isHeart
+        ? _pulse(phase, 0.12, 0.22) + _pulse(phase, 0.30, 0.12)
+        : 0.5 + 0.5 * math.sin(phase * math.pi * 2);
+    final Rect rect = Rect.fromLTWH(x, y, width, height);
+    final RRect rrect = _rrect(rect, 14);
+    _canvas.drawRRect(
+      rrect,
+      Paint()
+        ..shader = LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: <Color>[
+            accent.withOpacity(0.18),
+            _rgb(8, 28, 50, 0.92),
+            _rgb(3, 16, 30, 0.94),
+          ],
+        ).createShader(rect),
+    );
+    _withClipRRect(rrect, () {
+      _fillRadial(
+        Offset(x + width * 0.18, y + height * 0.42),
+        150,
+        accent.withOpacity(0.18 + pulseValue * 0.04),
+      );
+      _fillRadial(
+        Offset(x + width * 0.82, y + height * 0.78),
+        180,
+        cyan.withOpacity(0.08),
+      );
+    });
+    _strokeRRect(rrect, accent.withOpacity(0.18), 1);
+
+    final Offset iconCenter = Offset(x + 76, y + 84);
+    _fillRadial(iconCenter, 88, accent.withOpacity(0.18 + pulseValue * 0.06));
+    if (isHeart) {
+      _drawHeartIcon(iconCenter, accent, 1.34 + pulseValue * 0.12);
+    } else {
+      _drawLungIcon(iconCenter, accent, 1.28 + pulseValue * 0.10);
+    }
+
+    _drawText(
+      title,
+      x: x + 148,
+      y: y + 58,
+      size: 20,
+      color: text.withOpacity(0.9),
+      align: _CanvasTextAlign.left,
+      weight: FontWeight.w700,
+      tracking: 0.6,
+    );
+    _drawText(
+      subtitle,
+      x: x + 148,
+      y: y + 91,
+      size: 14,
+      color: muted,
+      align: _CanvasTextAlign.left,
+      weight: FontWeight.w500,
+    );
+    _drawText(
+      value,
+      x: x + 148,
+      y: y + 178,
+      size: 78,
+      color: text,
+      align: _CanvasTextAlign.left,
+      weight: FontWeight.w900,
+      glow: accent.withOpacity(0.20),
+    );
+    _drawText(
+      unit,
+      x: x + 272,
+      y: y + 162,
+      size: 17,
+      color: muted,
+      align: _CanvasTextAlign.left,
+      weight: FontWeight.w500,
+    );
+    _drawVitalMiniWave(
+      Rect.fromLTWH(x + 28, y + height - 100, width - 56, 64),
+      isHeart,
+      accent,
+      null,
+    );
+  }
+
+  void _drawVitalFocusDynamics(double x, double y) {
+    const double cardTop = 108;
+    const double cardGap = 34;
+    const double cardHeight = 368;
+    _drawVitalHeroCardDynamic(x + 22, y + cardTop, 481, cardHeight, pink, true);
+    _drawVitalHeroCardDynamic(
+      x + 22,
+      y + cardTop + cardHeight + cardGap,
+      481,
+      cardHeight,
+      green,
+      false,
+    );
+  }
+
+  void _drawVitalHeroCardDynamic(
+    double x,
+    double y,
+    double width,
+    double height,
+    Color accent,
+    bool isHeart,
+  ) {
+    final double phase = _phase(isHeart ? 1.4 : 2.8);
+    final Rect rect = Rect.fromLTWH(x, y, width, height);
+    final RRect rrect = _rrect(rect, 14);
+    _withClipRRect(rrect, () {
+      const double sweepWidth = 92;
+      final double sweepX = x - sweepWidth + (width + sweepWidth * 2) * phase;
+      final Rect sweep = Rect.fromLTWH(sweepX, y, sweepWidth, height);
+      _canvas.drawRect(
+        sweep,
+        Paint()
+          ..shader = LinearGradient(
+            begin: Alignment.centerLeft,
+            end: Alignment.centerRight,
+            colors: <Color>[
+              Colors.transparent,
+              accent.withOpacity(0.025),
+              Colors.transparent,
+            ],
+          ).createShader(sweep),
+      );
+    });
+    _drawVitalMiniWave(
+      Rect.fromLTWH(x + 28, y + height - 100, width - 56, 64),
+      isHeart,
+      accent,
+      phase,
+      includeBase: false,
+      intensity: 0.62,
+      drawDotGlow: false,
     );
   }
 
@@ -3523,7 +4969,9 @@ class _ShowroomPainter extends CustomPainter {
 
   void _drawCenter(double x, double y) {
     _drawBedArea(x, y);
-    _drawCompactShowroomCard(1018, 812);
+    if (!profile.isLight) {
+      _drawCompactShowroomCard(1018, 812);
+    }
   }
 
   void _drawBedArea(double x, double y) {
@@ -3876,6 +5324,8 @@ class _ShowroomPainter extends CustomPainter {
     Color accent,
     double? phase, {
     bool includeBase = true,
+    double intensity = 1,
+    bool drawDotGlow = true,
   }) {
     if (includeBase) {
       _canvas.drawRRect(
@@ -3910,27 +5360,34 @@ class _ShowroomPainter extends CustomPainter {
     _canvas.drawPath(
         trimmed,
         Paint()
-          ..color = accent.withOpacity(0.55)
+          ..color = accent.withOpacity(0.55 * intensity)
           ..style = PaintingStyle.stroke
-          ..strokeWidth = 2.4
+          ..strokeWidth = 2.4 * intensity
           ..strokeCap = StrokeCap.round
           ..strokeJoin = StrokeJoin.round
-          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6));
+          ..maskFilter = MaskFilter.blur(BlurStyle.normal, 6 * intensity));
     _canvas.drawPath(
         trimmed,
         Paint()
-          ..color = accent
+          ..color = accent.withOpacity(0.68 + 0.32 * intensity)
           ..style = PaintingStyle.stroke
-          ..strokeWidth = 2.4
+          ..strokeWidth = 2.4 * intensity
           ..strokeCap = StrokeCap.round
           ..strokeJoin = StrokeJoin.round);
     final Offset dot = _pointOnWave(segments, phase);
-    _drawOvalGlow(
-      Rect.fromCircle(center: dot, radius: 3.2),
-      accent.withOpacity(0.9),
-      accent.withOpacity(0.8),
-      7,
-    );
+    if (drawDotGlow) {
+      _drawOvalGlow(
+        Rect.fromCircle(center: dot, radius: 3.2),
+        accent.withOpacity(0.9),
+        accent.withOpacity(0.8),
+        7,
+      );
+    } else {
+      _canvas.drawOval(
+        Rect.fromCircle(center: dot, radius: 2.3),
+        Paint()..color = accent.withOpacity(0.78),
+      );
+    }
   }
 
   List<_VitalWaveSegment> _waveSegments(Rect rect, bool isHeart) {
@@ -4258,188 +5715,9 @@ enum _ShowroomPaintLayer {
   dynamic,
 }
 
-Uri _threeAssetUri({
-  required String scheme,
-  required String host,
-  required String pathPrefix,
-  int? port,
-}) {
-  return Uri(
-    scheme: scheme,
-    host: host,
-    port: port,
-    path: '${pathPrefix}assets/three_adjustment/index.html',
-    queryParameters: const <String, String>{
-      'embedded': '1',
-      'transparent': '1',
-      'mode': 'flat',
-      'ui': '0',
-      'performance': 'balanced',
-      'maxDpr': '1.25',
-      'renderMode': 'onDemand',
-    },
-  );
-}
-
-io.ContentType _assetContentType(String path) {
-  if (path.endsWith('.html')) {
-    return io.ContentType.html;
-  }
-  if (path.endsWith('.js')) {
-    return io.ContentType('text', 'javascript', charset: 'utf-8');
-  }
-  if (path.endsWith('.json')) {
-    return io.ContentType.json;
-  }
-  if (path.endsWith('.css')) {
-    return io.ContentType('text', 'css', charset: 'utf-8');
-  }
-  if (path.endsWith('.glb')) {
-    return io.ContentType('model', 'gltf-binary');
-  }
-  if (path.endsWith('.gltf')) {
-    return io.ContentType('model', 'gltf+json', charset: 'utf-8');
-  }
-  if (path.endsWith('.wasm')) {
-    return io.ContentType('application', 'wasm');
-  }
-  if (path.endsWith('.png')) {
-    return io.ContentType('image', 'png');
-  }
-  if (path.endsWith('.jpg') || path.endsWith('.jpeg')) {
-    return io.ContentType('image', 'jpeg');
-  }
-  if (path.endsWith('.webp')) {
-    return io.ContentType('image', 'webp');
-  }
-  if (path.endsWith('.svg')) {
-    return io.ContentType('image', 'svg+xml', charset: 'utf-8');
-  }
-  return io.ContentType.binary;
-}
-
 const double _designWidth = 1920;
 const double _designHeight = 1080;
 
 Color _rgb(int red, int green, int blue, [double opacity = 1]) {
   return Color.fromRGBO(red, green, blue, opacity);
 }
-
-const String _smartMattressBridgeScript = r'''
-(function() {
-  if (window.__smartMattressFlutterBridgeInstalled) return true;
-  window.__smartMattressFlutterBridgeInstalled = true;
-
-  if (window.SmartMattress3D && window.SmartMattress3D.getState && window.SmartMattress3D.getState().ready === true) {
-    window.SmartMattressBridge.postMessage(JSON.stringify({ type: "ready" }));
-  }
-
-  const adjustmentZones = ["shoulder", "back", "waist", "hip", "leg"];
-  const adjustmentModes = new Set(["auto", "zero", "left", "right", "deep"]);
-  const zoneDuration = 5000;
-  const adjustmentRunToken = { left: 0, right: 0 };
-  const adjustmentRunning = { left: false, right: false };
-
-  function callSmartMattress(method, ...args) {
-    const api = window.SmartMattress3D;
-    if (!api || typeof api[method] !== "function") return false;
-    api[method](...args);
-    return true;
-  }
-
-  function clearSideAdjustment(side) {
-    adjustmentRunToken[side] += 1;
-    adjustmentRunning[side] = false;
-    adjustmentZones.forEach((zone) => callSmartMattress("stopBladder", side, zone));
-    callSmartMattress("stopReveal", side);
-  }
-
-  function clearAllAdjustments() {
-    clearSideAdjustment("left");
-    clearSideAdjustment("right");
-  }
-
-  function runFineGrainedSideAdjustment(side, mode, token) {
-    if (token !== adjustmentRunToken[side]) return;
-    const shouldOrbitFromCurrentView = adjustmentRunning.left || adjustmentRunning.right;
-    adjustmentRunning[side] = true;
-    callSmartMattress("moveCameraToSide", side, { duration: 1800, path: shouldOrbitFromCurrentView ? "orbit" : "direct" });
-    callSmartMattress("startReveal", side, { duration: 2600 });
-
-    adjustmentZones.forEach((zone, index) => {
-      window.setTimeout(() => {
-        if (token !== adjustmentRunToken[side]) return;
-        callSmartMattress("startBladder", side, zone, { mode });
-      }, 2600 + index * zoneDuration);
-      window.setTimeout(() => {
-        if (token !== adjustmentRunToken[side]) return;
-        callSmartMattress("stopBladder", side, zone);
-      }, 2600 + (index + 1) * zoneDuration);
-    });
-
-    window.setTimeout(() => {
-      if (token !== adjustmentRunToken[side]) return;
-      adjustmentRunning[side] = false;
-      callSmartMattress("stopReveal", side);
-      if (!adjustmentRunning.left && !adjustmentRunning.right) {
-        callSmartMattress("moveCameraToOverview", { duration: 3000 });
-      }
-    }, 2600 + adjustmentZones.length * zoneDuration + 250);
-  }
-
-  window.__smartMattressSetMode = function(mode) {
-    if (window.SmartMattress3D && adjustmentModes.has(mode)) {
-      const sides = mode === "left" ? ["left"] : mode === "right" ? ["right"] : ["left", "right"];
-      if (sides.length > 1) {
-        clearAllAdjustments();
-        window.SmartMattress3D.setMode("flat");
-      }
-      sides.forEach((side, index) => {
-        clearSideAdjustment(side);
-        const token = adjustmentRunToken[side];
-        window.setTimeout(() => runFineGrainedSideAdjustment(side, mode, token), index * 120);
-      });
-      return true;
-    }
-    clearAllAdjustments();
-    if (window.SmartMattress3D && window.SmartMattress3D.setMode) {
-      window.SmartMattress3D.setMode(mode);
-      return true;
-    }
-    if (window.setMattressMode) {
-      window.setMattressMode(mode);
-      return true;
-    }
-    const button = document.querySelector('button[data-mode="' + mode + '"]');
-    if (!button) return false;
-    button.click();
-    return true;
-  };
-
-  window.__smartMattressSetDashboardData = function(dashboardData) {
-    if (window.SmartMattress3D && window.SmartMattress3D.setDashboardData) {
-      window.SmartMattress3D.setDashboardData(dashboardData);
-      return true;
-    }
-    return false;
-  };
-
-  window.__smartMattressSetHeating = function(heating) {
-    if (window.SmartMattress3D && window.SmartMattress3D.setHeating) {
-      window.SmartMattress3D.setHeating(heating);
-      return true;
-    }
-    return false;
-  };
-
-  window.__smartMattressResetView = function() {
-    clearAllAdjustments();
-    if (window.SmartMattress3D && window.SmartMattress3D.resetView) {
-      window.SmartMattress3D.resetView({ duration: 3000 });
-      return true;
-    }
-    return false;
-  };
-  return true;
-})();
-''';

@@ -1,6 +1,6 @@
 # Smart Mattress Showroom Flutter
 
-`showroom_flutter` 是智能床垫展厅的 Flutter 复刻工程。项目以 Flutter 绘制 1920 x 1080 横屏展示界面，并通过 WebView 承载 Three.js 3D 床垫模型，保持与 App 层交互的 JavaScript API 控制能力。
+`showroom_flutter` 是智能床垫展厅的 Flutter 复刻工程。项目以 Flutter 绘制 1920 x 1080 横屏展示界面，并通过移动端 WebView / Web 端 iframe 承载 Three.js 3D 床垫模型，保持与 App 层交互的 JavaScript API 控制能力。
 
 GitHub 仓库：
 
@@ -11,10 +11,11 @@ https://github.com/Txxyyy/showroom_flutter
 ## 项目目标
 
 - 独立 Flutter 工程，不修改原始 iOS SwiftUI 项目。
-- 支持 iOS 与 Android 横屏沉浸式运行。
+- 支持 iOS、Android 横屏沉浸式运行，并支持浏览器端联调展示页。
 - 用 Flutter `CustomPainter` 绘制展厅背景、数据面板、波形、仪表盘、底部控制区等静态与动态 UI。
 - 用 WebView 加载 Three.js 场景，展示 GLB 智能床垫模型。
 - 通过 `window.SmartMattress3D` 公开 API 控制调节模式、加热区域、复位、视角和动画。
+- 支持压电高亮、双侧独立波纹、控制区与产品介绍卡片切换等演示交互。
 
 ## 技术栈
 
@@ -32,14 +33,20 @@ showroom_flutter/
 ├── android/                         Android 工程
 ├── ios/                             iOS 工程
 ├── lib/
-│   └── main.dart                    Flutter 展厅 UI 和 WebView 桥接
+│   ├── main.dart                    Flutter 展厅 UI、控制区和 3D 页面桥接
+│   ├── showroom_scene_embed.dart    3D 场景嵌入入口
+│   ├── showroom_scene_embed_mobile.dart
+│   ├── showroom_scene_embed_types.dart
+│   └── showroom_scene_embed_web.dart
 ├── assets/
 │   └── three_adjustment/
 │       ├── index.html               Three.js 页面入口
 │       ├── scene.bundle.js          打包后的 Three.js 场景逻辑
 │       ├── smart-mattress-replica.glb
 │       └── vendor/three/            本地 Three.js 依赖
+├── web/                             Flutter Web 入口资源
 ├── tool/
+│   ├── preview_three_adjustment.sh  本地 3D 页面预览脚本
 │   └── three_adjustment_scene_entry.js
 ├── pubspec.yaml
 └── README.md
@@ -61,6 +68,17 @@ https://appassets.androidplatform.net/flutter_assets/assets/three_adjustment/ind
 ```
 
 iOS 端使用本地 HTTP asset server 加载同一套 Three.js 资源。
+
+Web 端通过 `HtmlElementView + iframe` 加载同一份 `assets/three_adjustment/index.html`，用于浏览器里做样式和交互联调。
+
+## 当前展厅交互
+
+- 轻智能大屏标题已统一为“智能床垫实时监测”。
+- 3D 床垫场景已集成到 Flutter 移动端页面，支持移动端与 Web 端共用同一套 Three.js 资源。
+- 压电高亮区域按模型对应侧横向居中展示，并按压电动画尺寸同步。
+- 左右两侧压电采集高亮与波点涟漪都支持独立开关，不再互斥。
+- 波点效果已调整为更暗的底态、更小的点径、分层高亮和更细更慢的扩散环。
+- 轻智能大屏支持在“演示控制区”和“产品功能介绍”之间切换，带切换动画；产品介绍覆盖心率监测、呼吸率监测和睡眠报告输出。
 
 ## 安装依赖
 
@@ -205,6 +223,47 @@ controller.applyPayload(<String, Object?>{
 
 压力分区 key 固定为 `shoulder`、`back`、`waist`、`hip`、`leg`；模式 key 使用 `auto`、`zero`、`left`、`right`、`deep`、`flat`。`values` 范围会限制在 `0..100`，`targets.pressure` 和 `targets.glow` 范围会限制在 `0..1`。
 
+除了模式、加热和分区压力数据，当前 payload 也支持：
+
+- `sensorFlow`：控制左右压电采集高亮、强度和数据流速率。
+- `rippleEffect`：控制左右波点涟漪开关和强度，左右状态可同时开启并异步运行。
+
+示例：
+
+```dart
+controller.applyPayload(<String, Object?>{
+  'sensorFlow': <String, Object?>{
+    'enabled': true,
+    'leftEnabled': true,
+    'rightEnabled': false,
+    'intensity': 0.92,
+    'dataRate': 0.54,
+  },
+  'rippleEffect': <String, Object?>{
+    'enabled': true,
+    'leftEnabled': true,
+    'rightEnabled': true,
+    'intensity': 0.86,
+  },
+});
+```
+
+## Web 联调
+
+运行 Flutter Web 页面：
+
+```bash
+flutter run -d chrome --web-hostname 127.0.0.1 --web-port 3000 --dart-define=APP_ENV=dev
+```
+
+如果只需要单独预览 Three.js 页面，可以运行：
+
+```bash
+./tool/preview_three_adjustment.sh
+```
+
+脚本会自动选择可用端口，并输出本地预览地址。
+
 ## 构建 APK
 
 普通 release APK：
@@ -216,7 +275,7 @@ flutter build apk --release --flavor prod --dart-define=APP_ENV=prod
 产物位置：
 
 ```text
-build/app/outputs/flutter-apk/app-release.apk
+build/app/outputs/flutter-apk/app-prod-release.apk
 ```
 
 按 CPU 架构拆包，适合真实设备分发：
@@ -234,6 +293,8 @@ build/app/outputs/flutter-apk/app-x86_64-release.apk
 ```
 
 小米电视等真实设备通常优先安装 `arm64-v8a` 或 `armeabi-v7a` 包。`x86_64` 主要用于模拟器。
+
+说明：当前仓库的 Android release 构建仍配置为 debug signing，适合本地安装演示，不适合直接用于应用市场分发。
 
 ## 构建 iOS
 
